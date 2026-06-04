@@ -1,0 +1,39 @@
+# Segredos — nunca no repo
+.env
+
+# Banco de dados local
+data/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual env / uv
+.venv/
+venv/
+.uv/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs locais
+*.log
+logs/
+
+# Uploads temporários
+uploads/

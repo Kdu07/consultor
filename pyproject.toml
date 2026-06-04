@@ -1,0 +1,35 @@
+[project]
+name = "consultor"
+version = "0.1.0"
+description = "Agente consultor financeiro pessoal — local, single-user"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "sqlmodel>=0.0.22",
+    "pydantic-settings>=2.6.0",
+    "httpx>=0.28.0",
+    "anthropic>=0.40.0",
+    "yfinance>=0.2.50",
+    "openpyxl>=3.1.0",
+    "pandas>=2.2.0",
+    "python-multipart>=0.0.12",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "httpx>=0.28.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

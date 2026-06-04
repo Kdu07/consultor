@@ -1,0 +1,21 @@
+from .posicao import Posicao, ClasseAtivo
+from .alvo import AlvoClasse, AlvoAtivo
+from .config_rebalanceamento import ConfigRebalanceamento
+from .perfil_risco import PerfilRisco
+from .quote_cache import QuoteCache
+from .snapshot_mensal import SnapshotMensal
+from .estrategia import EstrategiaInvestimento, PlanoFuturo, HistoricoEstrategia
+
+__all__ = [
+    "Posicao",
+    "ClasseAtivo",
+    "AlvoClasse",
+    "AlvoAtivo",
+    "ConfigRebalanceamento",
+    "PerfilRisco",
+    "QuoteCache",
+    "SnapshotMensal",
+    "EstrategiaInvestimento",
+    "PlanoFuturo",
+    "HistoricoEstrategia",
+]
