@@ -6,9 +6,11 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
+from .config import get_settings
 from .database import create_tables
 from .api.health import router as health_router
 from .api.chat import router as chat_router
+from .api.posicoes import router as posicoes_router
 from .seeds import seed_all
 
 # ---------------------------------------------------------------------------
@@ -48,6 +50,13 @@ async def lifespan(app: FastAPI):
     logger.info("Consultor iniciando — criando tabelas e semeando dados iniciais...")
     create_tables()
     seed_all()
+    settings = get_settings()
+    if not settings.anthropic_api_key:
+        logger.warning(
+            "ANTHROPIC_API_KEY nao configurada — copie .env.example para .env e preencha a chave."
+        )
+    else:
+        logger.info("Modelo: %s | provider: %s", settings.anthropic_model, settings.price_provider)
     logger.info("Consultor pronto em http://127.0.0.1:8000")
     yield
     logger.info("Consultor encerrado.")
@@ -65,6 +74,7 @@ app = FastAPI(
 
 app.include_router(health_router)
 app.include_router(chat_router)
+app.include_router(posicoes_router)
 
 # Serve arquivos estáticos (UI) de /static
 static_dir = Path(__file__).parent.parent / "static"

@@ -128,13 +128,13 @@
 
 <header>
   Consultor Financeiro Pessoal
-  <span class="badge">local · Fase 0</span>
+  <span class="badge">local · Fase 1</span>
 </header>
 
 <div id="chat">
   <div class="msg system">
-    Agente em construção. Fase 1 (loop do agente) vem a seguir.<br>
-    Por ora: <a href="/health" target="_blank">/health</a> mostra o status das fontes.
+    Consultor ativo. Tente: <em>"como está minha carteira hoje?"</em> ou <em>"qual a Selic?"</em><br>
+    <a href="/health" target="_blank">/health</a> · <a href="/docs" target="_blank">/docs (API)</a>
   </div>
 </div>
 
@@ -197,8 +197,9 @@
       });
       const data = await resp.json();
       loading.textContent = data.reply;
+      const cost = data.cost_usd ? ` · ~US$ ${data.cost_usd.toFixed(4)}` : '';
       const meta = (data.tokens_input || data.tokens_output)
-        ? `tokens: ${data.tokens_input} in / ${data.tokens_output} out`
+        ? `${data.iterations} iter · ${data.tokens_input} in / ${data.tokens_output} out tokens${cost}`
         : '';
       if (meta) {
         const m = document.createElement('div');
