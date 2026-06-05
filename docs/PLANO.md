@@ -324,7 +324,7 @@ resultado (coerente com o guardrail antialucinação).
 | Tool | Função | Fonte |
 |---|---|---|
 | `ler_carteira()` | posições atuais (com source/as_of) | SQLite |
-| `importar_extrato(arquivo)` | lê XLSX, extrai, retorna **preview para confirmação** (não grava) | upload |
+| `importar_extrato(texto)` | lê texto colado do PDF BTG, extrai, retorna **preview para confirmação** (não grava) | colagem |
 | `gravar_posicoes(...)` | grava as posições **após confirmação explícita** (turno separado — ver §3 / guardrail 4) | SQLite |
 | `dados_ativo(ticker)` | preço, P/L, setor, variação | brapi → yfinance (fallback); `tesouro` p/ TD (+source) |
 | `noticias(ticker_ou_tema)` | manchetes recentes | RSS (+brapi p/ tickers cobertos) |
@@ -412,15 +412,21 @@ diários nesta etapa.**
 - **Saída:** responder "como está minha carteira hoje?" localmente, com números reais,
   fonte marcada e custo logado.
 
-### Fase 1.5 — Spike do parser XLSX (timeboxed, ~1 dia)
-- Pegar **um extrato real** do BTG em Excel e provar a extração ponta a ponta num script
-  isolado, **antes** de integrar. Atenção às classes mistas (RF/Tesouro).
-- **Saída:** confiança (ou não) de que o parser é viável; decisão informada sobre a Fase 2.
-  (Como a edição manual já funciona desde a Fase 1, o parser é conveniência, não bloqueio.)
+### Fase 1.5 — Spike do parser de colagem de texto ✅ CONCLUÍDO
+- **Decisão:** BTG não emite XLSX — apenas PDF. Adotada a **opção B (colagem de texto)**:
+  usuário copia o texto do PDF (Ctrl+A / Ctrl+C no leitor) e cola numa textarea da UI.
+- Spike implementado em `scripts/spike_btg_parser.py` e validado contra extrato real (05/2026).
+- **Resultado:** 14/14 posições extraídas corretamente (5 Tesouro, 5 ações, 1 ETF, 3 FIIs);
+  total R$ 44.363,04 bate exatamente com o extrato.
+- **Limitação confirmada:** RF privada (CDB/LCI/LCA) não aparece como tabela estruturada no
+  texto do PDF — segue via edição manual (`POST /posicoes`). Não é bloqueio.
+- Parser state-machine: seções detectadas por markers; Detalhamento/Movimentação ignorados;
+  LFT→"Tesouro Selic YYYY", LTN→"Tesouro Prefixado YYYY", NTNB-P→"Tesouro IPCA+ YYYY".
 
 ### Fase 2 — Import + análise de carteira
-- `importar_extrato` (XLSX) que devolve preview; `gravar_posicoes` num turno de confirmação
-  separado (§3) — nunca grava sem o "sim".
+- `importar_extrato(texto: str)` que devolve preview (parser de `scripts/spike_btg_parser.py`
+  já provado); `gravar_posicoes` num turno de confirmação separado (§3) — nunca grava sem o "sim".
+- UI: textarea de colagem (não upload de arquivo).
 - `calcular_desvio` sobre **snapshot coerente** (por classe e por ativo + flag de banda +
   fração ao-vivo/extrato + as_of mais antigo + data das posições — seção 8) + `contexto_macro`.
 - Avisar quando a carteira sair do alvo/banda (sob demanda, não push).
