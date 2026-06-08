@@ -88,6 +88,24 @@ TOOL_DEFINITIONS: list[dict] = [
         },
     },
     {
+        "name": "noticias",
+        "description": (
+            "Busca manchetes recentes sobre um ticker ou tema financeiro via RSS. "
+            "Use para perguntas como 'o que está acontecendo com PETR4?' ou 'últimas notícias sobre Selic'. "
+            "Cache de 4h. Retorna até 8 manchetes com título, fonte e data."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker_ou_tema": {
+                    "type": "string",
+                    "description": "Ticker B3 (ex: PETR4, KNCR11) ou tema livre (ex: 'Selic', 'inflação', 'mercado').",
+                }
+            },
+            "required": ["ticker_ou_tema"],
+        },
+    },
+    {
         "name": "importar_extrato",
         "description": (
             "Parseia o texto copiado do extrato PDF da conta de investimento do BTG "
