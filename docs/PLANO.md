@@ -1,15 +1,18 @@
 # Agente Consultor Financeiro Pessoal — Plano Final
 
-> Versão final (rev. 2). Decisões fechadas: **execução local** (roda no PC do usuário, sem
-> servidor, sem mobile, sem PWA); **brapi.dev como fonte primária de cotações planejada para
-> produção** (paga, oficial), com **yfinance apenas para validação/bootstrap e fallback** — a
-> troca para a brapi é prevista, não hipótese; **Tesouro Direto (preço diário oficial)** para
-> a renda fixa pública; **Banco Central (API SGS)** para macro e **RSS** para notícias;
-> **import de extrato em XLSX** com gravação só após confirmação; **desvio calculado sobre
-> snapshot coerente** com divulgação de frescor; **loop do agente** com teto de iterações e
-> tools que nunca estouram; **Claude Sonnet 4.6** como modelo, **sem prompt caching**
-> (decisão deliberada — ver §5). System prompt já redigido (`system_prompt_consultor_otimizado.md`).
-> Pronto para iniciar pela Fase 0.
+> Versão final (rev. 3 — atualizado após conclusão das Fases 0–2). Decisões fechadas:
+> **execução local** (roda no PC do usuário, sem servidor, sem mobile, sem PWA);
+> **brapi.dev como fonte primária de cotações planejada para produção** (paga, oficial),
+> com **yfinance apenas para validação/bootstrap e fallback** — a troca para a brapi é
+> prevista, não hipótese; **Tesouro Direto (preço diário oficial)** para a renda fixa
+> pública; **Banco Central (API SGS)** para macro e **RSS** para notícias;
+> **import de extrato por colagem de texto** (BTG emite apenas PDF — ver §7.1 e §7.4)
+> com gravação só após confirmação; **desvio calculado sobre snapshot coerente** com
+> divulgação de frescor; **loop do agente** com teto de iterações e tools que nunca
+> estouram; **Claude Sonnet 4.6** como modelo, **sem prompt caching** (decisão deliberada
+> — ver §5). System prompt já redigido (`system_prompt_consultor_otimizado.md`).
+>
+> **Estado atual:** Fases 0, 1, 1.5 e 2 concluídas. Próximo passo: Fase 3 (notícias + UI).
 
 ---
 
@@ -59,7 +62,7 @@ pilares:
 | Modelo | claude-sonnet-4-6 | Melhor custo/qualidade para o consultor |
 | ORM | SQLModel | Pydantic + SQLAlchemy, pouco boilerplate |
 | Validação | Pydantic v2 | Schemas das tools e da confirmação de import |
-| Parsing Excel | `openpyxl` / `pandas` | Padrão de mercado para XLSX |
+| Parser de extrato | `re` (regex stdlib) | Import por colagem de texto (PDF) — ver §7.1. `openpyxl`/`pandas` disponíveis se necessário no futuro |
 | Cliente HTTP | `httpx` | Async, timeouts, retries |
 | Cotações (RV) | `brapi` (primário planejado) → `yfinance` (validação/fallback) | brapi: paga/oficial; yfinance: gratuito, só validação (ver 6) |
 | Cotações (RF pública) | API / dado aberto do Tesouro Direto | Preço diário oficial; tira o Tesouro do "datado" (ver 6.7) |
@@ -93,11 +96,11 @@ turno só de texto. As definições do loop ficam explícitas (não implícitas)
   system prompt" basta e dificilmente encosta no limite). Loga tokens **por iteração**, não
   só por conversa.
 - **Confirmação como fronteira de turno, não pausa no loop.** O import é dois turnos:
-  (1) upload → `importar_extrato` devolve o preview parseado como `tool_result` → o modelo
-  apresenta "entendi isto: … confirma?" e o loop encerra (só texto); (2) o usuário confirma
-  → o modelo chama uma tool **separada de escrita** (`gravar_posicoes`) → grava. Assim o
-  guardrail "nunca grava sem confirmação" (guardrail 4) é garantido pela arquitetura: a
-  escrita só existe no turno de confirmação.
+  (1) colagem do texto do PDF → `importar_extrato(texto)` devolve o preview parseado como
+  `tool_result` → o modelo apresenta "entendi isto: … confirma?" e o loop encerra (só
+  texto); (2) o usuário confirma → o modelo chama uma tool **separada de escrita**
+  (`gravar_posicoes`) → grava. Assim o guardrail "nunca grava sem confirmação" (guardrail 4)
+  é garantido pela arquitetura: a escrita só existe no turno de confirmação.
 
 ---
 
@@ -139,8 +142,10 @@ turno só de texto. As definições do loop ficam explícitas (não implícitas)
   arquitetura é cache-ready (o contexto dinâmico é injetado no fim → a parte fixa é um
   prefixo estável), então ligar no futuro — se for por **latência**, não por custo — é
   trivial. Por ora: **desligado**.
-- **Ordem de grandeza:** conversa típica (~10k in / 2k out) ≈ US$ 0,06. No uso sob demanda
-  → poucos reais por mês, centavos em meses fracos.
+- **Ordem de grandeza observada:** pergunta simples (~8k in / 1k out) ≈ US$ 0,04; consulta
+  de desvio (~30k in / 1k out) ≈ US$ 0,11; import de extrato completo (~19k in / 5k out)
+  ≈ US$ 0,13. No uso sob demanda → poucos reais por mês, centavos em meses fracos. O custo
+  alto no import se deve ao payload do texto do PDF — acontece uma vez por mês.
 - **Controle de gasto:** logar tokens (input/output) por conversa **e por iteração do loop**
   para ter visibilidade. Volume é tão baixo que não há risco real de fatura surpreender.
 
@@ -198,8 +203,14 @@ de ticker fica encapsulada em cada provider (brapi usa `PETR4` cru; yfinance usa
   minutos é mais que suficiente.
 
 ### 6.5 Macro e notícias
-- `contexto_macro()` → **API pública do BCB (SGS)**: Selic, CDI, IPCA, câmbio. Oficial,
-  gratuita, sem chave. (Códigos das séries confirmados na build.) Sem dependência da brapi.
+- `contexto_macro()` → **API pública do BCB (SGS)**: Meta Selic, IPCA, câmbio. Oficial,
+  gratuita, sem chave. Séries usadas (confirmadas em produção):
+  - **432** — Meta Selic (% a.a., alvo Copom) — ex.: "14,75"
+  - **433** — IPCA variação mensal (% a.m.) — ex.: "0,43"
+  - **1** — Taxa de câmbio USD/BRL (compra, fim de período)
+  - Nota: série 11 (taxa Selic *diária*, ex.: "0,054") foi descartada em favor da 432 que
+    devolve diretamente o valor anualizado intuitivo.
+  - CDI não incluído explicitamente (≈ Selic − 0,10 p.p.; o agente referencia pela Selic).
 - `noticias()` → feeds **RSS** (InfoMoney/Valor) como fonte. (A brapi, já planejada como
   primária de cotações, pode complementar notícias para tickers cobertos.) Implementação na
   Fase 3.
@@ -229,11 +240,14 @@ ficar preso ao valor datado do extrato nem depender de plano pago.
 
 ### 7.1 Atualização
 BTG não tem API pública PF. Atualização **manual, cadência mensal**, com dois caminhos:
-- **Edição manual** das posições (built-in desde a Fase 1) — confiável e simples; para
-  ~15-30 posições leva poucos minutos por mês.
-- **Import de extrato XLSX** (Fase 2) como conveniência: usuário exporta a posição do BTG
-  em planilha e faz upload; o agente lê, extrai ativos e quantidades, **mostra o que
-  entendeu para confirmação** antes de gravar (evita parsing silencioso errado).
+- **Edição manual** das posições (`POST /posicoes`, built-in desde a Fase 1) — confiável e
+  simples; para ~15-30 posições leva poucos minutos por mês. Único caminho para RF privada
+  (CDB/LCI/LCA), que não aparece no texto do PDF.
+- **Import por colagem de texto** (Fase 2, operacional): BTG emite apenas PDF — **não há
+  XLSX**. O usuário abre o extrato no leitor de PDF, faz Ctrl+A (selecionar tudo) → Ctrl+C
+  (copiar) → cola na textarea "Importar extrato BTG" na UI. O parser extrai posições de RV
+  (ações, FIIs, ETFs) e Tesouro Direto, mostra o **preview para confirmação** antes de
+  gravar. Validado com extrato real 05/2026: 14/14 posições, total exato.
 - Cotações de ativos com ticker são sempre via `PriceProvider`, nunca digitadas.
 
 ### 7.2 Renda variável vs. renda fixa — decisão tomada
@@ -260,11 +274,16 @@ precificação difere por tipo**, e isso é explícito:
 - `QuoteCache`: ver 6.4.
 - `SnapshotMensal`: data, JSON da carteira + valor total — histórico para análise.
 
-### 7.4 Onde baixar o extrato no BTG (em XLSX)
-- **BTG web:** Investimentos → Extratos/Relatórios → exportar posição em **planilha
-  (Excel)**.
-- Para testar o parser (Fase 1.5): pegar um arquivo com **classes variadas** (ações + FII
-  + renda fixa + tesouro), que é o caso mais hostil.
+### 7.4 Como exportar o extrato do BTG (colagem de texto)
+O BTG **não oferece exportação em XLSX ou CSV** — apenas PDF. O fluxo para importar:
+1. **BTG web/app:** Investimentos → Extratos → "Extrato da Conta Investimento" → período desejado → abrir/baixar PDF.
+2. **No leitor de PDF** (Adobe, navegador, etc.): **Ctrl+A** (selecionar tudo) → **Ctrl+C** (copiar).
+3. **Na UI do consultor:** botão "Importar extrato BTG" → colar (Ctrl+V) na textarea → "Importar".
+4. O agente apresenta o preview → usuário confirma → `gravar_posicoes` salva.
+
+**O que é extraído:** ações, FIIs, ETFs, Tesouro Direto (LFT/LTN/NTNB-P).
+**O que NÃO é extraído:** RF privada (CDB/LCI/LCA) — não aparece como tabela estruturada no texto do PDF. Lance manualmente via `POST /posicoes`.
+**Parser state-machine** em `app/tools/btg_parser.py` (Tesouro: LFT→"Tesouro Selic YYYY", LTN→"Tesouro Prefixado YYYY", NTNB-P→"Tesouro IPCA+ YYYY").
 
 ---
 
@@ -389,28 +408,22 @@ diários nesta etapa.**
 
 ## 13. Fases de construção
 
-### Fase 0 — Fundações (local)
+### Fase 0 — Fundações (local) ✅ CONCLUÍDA
 - Estrutura de pastas, repo, `.gitignore` com `.env`, `uv` com lockfile.
 - Esqueleto do FastAPI rodando em `127.0.0.1:8000` ("hello world" no navegador).
-- SQLite + modelos (seção 7.3).
-- Validar 1 chamada real de cotação (ex.: `PETR4.SA` via **yfinance — neste papel de
-  validação/bootstrap**) e 1 de macro (Selic via BCB) — cada uma aparecendo no log.
-- **Saída:** localhost respondendo "ok" no navegador, uma cotação real e uma Selic real no
-  log. (Sem Hetzner, sem Caddy, sem auth — tudo isso saiu.)
+- SQLite + modelos (seção 7.3) incluindo stubs da Fase 5 (sem migração futura).
+- Validar 1 chamada real de cotação (`PETR4.SA` via yfinance) e 1 de macro (Selic via BCB) — cada uma no log.
+- **Saída alcançada:** localhost respondendo "ok", PETR4 R$ 41,25 (yfinance) e Selic 0,054% (BCB série 11) no log.
 
-### Fase 1 — Núcleo consultivo
-- `PriceProvider`: `BrapiProvider` (**primário de produção**) + `YFinanceProvider`
-  (validação/fallback) + `TesouroProvider` (RF pública, 6.7) + cache. (Pode-se validar em
-  modo yfinance antes de plugar a chave da brapi — ver 6.2.)
-- **Loop do agente** com teto de iterações e tool-results estruturados (§3).
-- Tools `ler_carteira`, `dados_ativo` e `contexto_macro` (BCB).
-- Edição manual de posições (incl. renda fixa via valor do extrato).
-- System prompt do "consultor" ligado, com guardrails 1–6 (arquivo
-  `system_prompt_consultor_otimizado.md`).
-- Semear `ConfigRebalanceamento` com os padrões da seção 8.2.
-- Logging de tokens/custo (por conversa e por iteração) + health-check básico.
-- **Saída:** responder "como está minha carteira hoje?" localmente, com números reais,
-  fonte marcada e custo logado.
+### Fase 1 — Núcleo consultivo ✅ CONCLUÍDA
+- `PriceProvider`: `BrapiProvider` (stub pronto) + `YFinanceProvider` (ativo) + `TesouroProvider` + `CompositeProvider` + cache 15 min.
+- **Loop do agente** com MAX_ITERS=6, tool dispatch paralelo (`asyncio.gather`), logging de tokens por iteração e por conversa.
+- Tools `ler_carteira`, `dados_ativo` e `contexto_macro` (BCB séries 432/433/1).
+- Edição manual de posições via `GET/POST/DELETE /posicoes` (incl. RF via valor do extrato).
+- System prompt ligado (`system_prompt_consultor_otimizado.md`), guardrails 1–6 ativos.
+- `ConfigRebalanceamento` semeado com padrões §8.2; `PerfilRisco` e `AlvoClasse` semeados.
+- Health-check em `/health` (testa yfinance, BCB e SQLite).
+- **Saída alcançada:** "como está minha carteira hoje?" respondido em 3 iterações, ~US$ 0,045/conversa.
 
 ### Fase 1.5 — Spike do parser de colagem de texto ✅ CONCLUÍDO
 - **Decisão:** BTG não emite XLSX — apenas PDF. Adotada a **opção B (colagem de texto)**:
@@ -423,22 +436,19 @@ diários nesta etapa.**
 - Parser state-machine: seções detectadas por markers; Detalhamento/Movimentação ignorados;
   LFT→"Tesouro Selic YYYY", LTN→"Tesouro Prefixado YYYY", NTNB-P→"Tesouro IPCA+ YYYY".
 
-### Fase 2 — Import + análise de carteira
-- `importar_extrato(texto: str)` que devolve preview (parser de `scripts/spike_btg_parser.py`
-  já provado); `gravar_posicoes` num turno de confirmação separado (§3) — nunca grava sem o "sim".
-- UI: textarea de colagem (não upload de arquivo).
-- `calcular_desvio` sobre **snapshot coerente** (por classe e por ativo + flag de banda +
-  fração ao-vivo/extrato + as_of mais antigo + data das posições — seção 8) + `contexto_macro`.
-- Avisar quando a carteira sair do alvo/banda (sob demanda, não push).
-- `SnapshotMensal` da carteira no histórico.
-- **Saída:** "minha carteira saiu do alvo?" respondido com dados confiáveis, nos dois
-  níveis, com status de banda e frescor declarado.
+### Fase 2 — Import + análise de carteira ✅ CONCLUÍDA (gap menor pendente)
+- `importar_extrato(texto)`: parser BTG integrado em `app/tools/btg_parser.py`, preview formatado por classe — nunca salva (guardrail 4 por arquitetura).
+- `gravar_posicoes(posicoes)`: upsert por ticker/nome, source="extrato", only no turno de confirmação.
+- `calcular_desvio()`: snapshot coerente (RV+Tesouro ao vivo via asyncio.gather, RF pelo extrato), desvio em p.p. e R$, flag de banda 5/25, fração ao-vivo/extrato, as_of mais antigo, data última atualização de posições.
+- UI: modal de colagem (botão "Importar extrato BTG" no header).
+- **Gap:** `SnapshotMensal` — modelo de dados existe, mas a tool/endpoint de tirar o snapshot mensal não foi implementada. Mover para Fase 3 (é conveniência, não bloqueio).
+- **Saída alcançada:** import → preview → "sim" → 14 posições gravadas → "minha carteira saiu do alvo?" com análise completa, ~US$ 0,11/consulta de desvio.
 
-### Fase 3 — Notícias + UI polida
-- `noticias` (RSS; + brapi para tickers cobertos).
-- Polir a UI web local: chat + dashboard da carteira + tela de import. (Sem PWA/offline/
-  manifest — não são necessários no escopo local.)
-- **Saída:** app local usável, com notícias relevantes por ticker.
+### Fase 3 — Notícias + UI polida + SnapshotMensal ← PRÓXIMA
+- `noticias(ticker_ou_tema)`: feeds RSS (InfoMoney/Valor Econômico). Implementar parser de feed + cache de manchetes por ticker.
+- `SnapshotMensal`: endpoint/tool para tirar fotografia mensal da carteira (modelo já existe — apenas a lógica de gravação falta).
+- Polir a UI web local: dashboard de carteira (tabela posições + desvio visual), melhorias no chat. Sem PWA/offline/manifest — não necessários no escopo local.
+- **Saída:** app local usável com notícias por ticker e dashboard de carteira; snapshot mensal disponível.
 
 ### Fase 4 — (Depois) Recomendação de rebalanceamento
 - Camada de sugestão mensal, **só** quando o parsing estiver validado e os dados
@@ -497,7 +507,7 @@ aberto.
 | yfinance instável (fonte não-oficial, usada só p/ validação/fallback) | brapi é a primária planejada de produção; yfinance recua a fallback; + cache stale + "não tenho dado" + health-check |
 | Loop do agente não terminar / custo disparar | teto de iterações `MAX_ITERS` (§3); tools nunca estouram (tool-results estruturados de erro) |
 | Desvio contaminado por dado datado | snapshot coerente + Tesouro ao vivo (6.7) + divulgação de fração ao-vivo/extrato e as_of mais antigo (8.1) |
-| Parser de extrato hostil | Spike isolado na Fase 1.5; edição manual já funciona como fallback permanente |
+| Parser de extrato (colagem PDF) | Spike validado com extrato real 05/2026: 14/14 posições corretas. Limitação conhecida: RF privada não estruturada no PDF → edição manual. Se o BTG mudar o layout do PDF, o parser pode quebrar — monitorar e corrigir os markers. |
 | Perder o arquivo SQLite | Backup local + cópia em nuvem + restauração testada |
 | Bit rot (libs/formato mudam) | Logs + health-check + lockfile `uv`. Ter a brapi (oficial) como primária reduz o bit rot de fonte não-oficial; yfinance fica de fallback |
 | Renda fixa sem cotação pública (CDB/LCI/LCA/fundos) | Valor do extrato com source/as_of + aviso de dado datado. Tesouro **não** entra aqui: tem preço diário oficial (6.7) |
@@ -535,11 +545,7 @@ Registrados para não serem confundidos com esquecimento:
 
 ## 17. Próximo passo
 
-Começar por **Fase 0 + Fase 1**: estrutura de pastas, esqueleto do FastAPI rodando em
-`127.0.0.1`, `PriceProvider` (yfinance para validação; brapi a primária planejada) +
-`TesouroProvider`, o loop do agente com teto de iterações (§3), tools `ler_carteira`,
-`dados_ativo` e `contexto_macro` (BCB), edição manual de posições, o system prompt ligado e
-o `ConfigRebalanceamento` semeado. Confirmação ao fim de cada fase antes de avançar.
+**Fase 3:** `noticias(ticker_ou_tema)` via RSS + `SnapshotMensal` + UI polida (dashboard de carteira). Confirmar ao fim antes de avançar para a Fase 4.
 
 > **Disclaimer:** este projeto produz conteúdo educacional/informativo. Não é
 > recomendação de investimento. Você é o único responsável pelas decisões.
