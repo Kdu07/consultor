@@ -519,7 +519,17 @@ aberto.
 
 ## 16. Pontos deixados explicitamente para depois (fora do escopo atual)
 
-Registrados para não serem confundidos com esquecimento:
+### Gaps conhecidos nas fases entregues (não bloqueadores)
+
+| Gap | Descrição | Quando resolver |
+|---|---|---|
+| G2 — Retry HTTP | PLANO §11 diz "1 retry"; só timeout implementado. Cache absorve falhas transitórias. | Fase 3 ou quando houver instabilidade observada |
+| G4 — TesouroProvider nomes | Parser BTG gera "Tesouro Selic 2028"; endpoint do Tesouro pode ter sufixos/variações. Fallback para extrato funciona. | Validar com próximo import real; corrigir busca parcial se necessário |
+| G5 — AlvoAtivo vazio | Alvos por ativo individual não configurados. `calcular_desvio` retorna desvio nulo por ativo. | Usuário define conforme monta carteira de referência |
+| G6 — Health check sem Tesouro | `/health` não testa o endpoint do Tesouro Direto. | Fase 3 (junto com outros ajustes de observabilidade) |
+
+### Decisões e itens fora do escopo
+
 - Servidor MCP da brapi (decisão: usar REST nas próprias tools — 6.6).
 - Agendador de resumo mensal automático (avaliar após Fase 3).
 - Camada de recomendação de rebalanceamento (Fase 4).
