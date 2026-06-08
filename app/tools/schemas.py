@@ -72,4 +72,73 @@ TOOL_DEFINITIONS: list[dict] = [
             "required": [],
         },
     },
+    {
+        "name": "calcular_desvio",
+        "description": (
+            "Calcula o desvio da carteira em relação aos alvos (por classe e por ativo) "
+            "usando snapshot coerente: RV e Tesouro com preço ao vivo, RF privada pelo valor do extrato. "
+            "Retorna desvio em p.p. e R$, flag dentro/fora da banda 5/25, fração ao-vivo vs. extrato, "
+            "as_of mais antigo e data da última atualização das posições. "
+            "Chame antes de responder 'devo rebalancear?' — nunca estime de cabeça."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
+        "name": "importar_extrato",
+        "description": (
+            "Parseia o texto copiado do extrato PDF da conta de investimento do BTG "
+            "(seções: Ações, ETF, Fundos Listados, Tesouro Direto). "
+            "Retorna PREVIEW com as posições extraídas — NÃO salva nada. "
+            "Após apresentar o preview ao usuário e receber 'sim' explícito, "
+            "chame gravar_posicoes para gravar. NUNCA grave sem confirmação."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "texto": {
+                    "type": "string",
+                    "description": (
+                        "Texto completo copiado do extrato PDF do BTG "
+                        "(selecionar tudo Ctrl+A e copiar Ctrl+C no leitor de PDF)."
+                    ),
+                }
+            },
+            "required": ["texto"],
+        },
+    },
+    {
+        "name": "gravar_posicoes",
+        "description": (
+            "Salva as posições do preview no banco de dados. "
+            "SOMENTE chame após o usuário confirmar explicitamente com 'sim' ou equivalente. "
+            "Nunca chame no mesmo turno que importar_extrato — a confirmação é um turno separado."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "posicoes": {
+                    "type": "array",
+                    "description": "Lista de posições exatamente como retornado por importar_extrato.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "ticker":        {"type": "string"},
+                            "nome":          {"type": "string"},
+                            "classe":        {"type": "string"},
+                            "quantidade":    {"type": "number"},
+                            "preco_medio":   {"type": "number"},
+                            "valor_mercado": {"type": "number"},
+                            "as_of":         {"type": "string"},
+                        },
+                        "required": ["nome", "classe", "quantidade", "valor_mercado"],
+                    },
+                }
+            },
+            "required": ["posicoes"],
+        },
+    },
 ]

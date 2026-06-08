@@ -122,14 +122,75 @@
 
     .spinner { display: inline-block; animation: spin 1s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Painel de import */
+    #import-panel {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+    }
+    #import-panel.open { display: flex; }
+    #import-box {
+      background: #fff;
+      border-radius: 12px;
+      padding: 24px;
+      width: min(640px, 92vw);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+    }
+    #import-box h2 { font-size: 15px; font-weight: 600; color: #1a1a2e; }
+    #import-box p  { font-size: 13px; color: #555; line-height: 1.5; }
+    #extrato-text {
+      width: 100%; height: 220px;
+      padding: 10px 12px;
+      border: 1px solid #ccc; border-radius: 8px;
+      font-size: 12px; font-family: monospace;
+      resize: vertical; outline: none;
+    }
+    #extrato-text:focus { border-color: #1a1a2e; }
+    .import-actions { display: flex; gap: 8px; justify-content: flex-end; }
+    .btn-sec {
+      padding: 9px 18px; background: #f0f0f0; color: #333;
+      border: none; border-radius: 8px; font-size: 13px; cursor: pointer;
+    }
+    .btn-sec:hover { background: #e0e0e0; }
   </style>
 </head>
 <body>
 
 <header>
   Consultor Financeiro Pessoal
-  <span class="badge">local · Fase 1</span>
+  <span class="badge">local · Fase 2</span>
+  <button class="btn-sec" id="open-import" style="margin-left:auto;font-size:12px;padding:6px 14px;">
+    Importar extrato BTG
+  </button>
 </header>
+
+<!-- Modal de import por colagem -->
+<div id="import-panel">
+  <div id="import-box">
+    <h2>Importar extrato do BTG</h2>
+    <p>
+      No leitor de PDF, abra o extrato da conta de investimento &rarr;
+      <strong>Ctrl+A</strong> (selecionar tudo) &rarr; <strong>Ctrl+C</strong> (copiar) &rarr;
+      cole abaixo e clique em <strong>Importar</strong>.
+    </p>
+    <textarea id="extrato-text" placeholder="Cole aqui o texto do extrato PDF do BTG..."></textarea>
+    <p style="font-size:12px;color:#888;">
+      RF privada (CDB/LCI/LCA) nao aparece no texto — lance manualmente se necessario.
+    </p>
+    <div class="import-actions">
+      <button class="btn-sec" id="cancel-import">Cancelar</button>
+      <button id="do-import">Importar</button>
+    </div>
+  </div>
+</div>
 
 <div id="chat">
   <div class="msg system">
@@ -149,6 +210,28 @@
   const input = document.getElementById('input');
   const btn = document.getElementById('btn');
   const SESSION_ID = 'sess-' + Math.random().toString(36).slice(2, 10);
+
+  // --- Modal de import ---
+  document.getElementById('open-import').addEventListener('click', () => {
+    document.getElementById('import-panel').classList.add('open');
+    document.getElementById('extrato-text').focus();
+  });
+  document.getElementById('cancel-import').addEventListener('click', () => {
+    document.getElementById('import-panel').classList.remove('open');
+  });
+  document.getElementById('import-panel').addEventListener('click', (e) => {
+    if (e.target === document.getElementById('import-panel'))
+      document.getElementById('import-panel').classList.remove('open');
+  });
+  document.getElementById('do-import').addEventListener('click', async () => {
+    const texto = document.getElementById('extrato-text').value.trim();
+    if (!texto) { alert('Cole o texto do extrato antes de importar.'); return; }
+    document.getElementById('import-panel').classList.remove('open');
+    // Envia como mensagem de chat — o agente chama importar_extrato e apresenta o preview
+    const msg = 'Por favor, importe este extrato do BTG para minha carteira:\n\n' + texto;
+    await sendMessage(msg);
+    document.getElementById('extrato-text').value = '';
+  });
 
   // Auto-resize textarea
   input.addEventListener('input', () => {
@@ -176,19 +259,11 @@
     return div;
   }
 
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const msg = input.value.trim();
+  async function sendMessage(msg) {
     if (!msg) return;
-
-    input.value = '';
-    input.style.height = 'auto';
     btn.disabled = true;
-
-    addMsg(msg, 'user');
-    const loading = addMsg('⟳ Consultando...', 'agent');
-    loading.querySelector || (loading.innerHTML = '<span class="spinner">⟳</span> Consultando...');
-
+    addMsg(msg.length > 120 ? msg.slice(0, 120) + '…' : msg, 'user');
+    const loading = addMsg('Consultando...', 'agent');
     try {
       const resp = await fetch('/chat', {
         method: 'POST',
@@ -203,16 +278,24 @@
         : '';
       if (meta) {
         const m = document.createElement('div');
-        m.className = 'meta';
-        m.textContent = meta;
+        m.className = 'meta'; m.textContent = meta;
         loading.appendChild(m);
       }
     } catch (err) {
-      loading.textContent = 'Erro de comunicação com o servidor.';
+      loading.textContent = 'Erro de comunicacao com o servidor.';
     } finally {
       btn.disabled = false;
       input.focus();
     }
+  }
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const msg = input.value.trim();
+    if (!msg) return;
+    input.value = '';
+    input.style.height = 'auto';
+    await sendMessage(msg);
   });
 </script>
 

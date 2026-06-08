@@ -19,6 +19,9 @@ import anthropic
 from ..config import get_settings
 from ..tools.ativo import tool_dados_ativo
 from ..tools.carteira import tool_ler_carteira
+from ..tools.desvio import tool_calcular_desvio
+from ..tools.extrato import tool_importar_extrato
+from ..tools.gravar import tool_gravar_posicoes
 from ..tools.macro import tool_contexto_macro
 from ..tools.schemas import TOOL_DEFINITIONS, to_tool_content
 from .system_prompt import build_system_prompt
@@ -30,9 +33,12 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _TOOL_DISPATCH: dict[str, Any] = {
-    "ler_carteira": lambda _inputs: tool_ler_carteira(),
-    "dados_ativo": lambda inputs: tool_dados_ativo(inputs["ticker"]),
-    "contexto_macro": lambda _inputs: tool_contexto_macro(),
+    "ler_carteira":    lambda _i: tool_ler_carteira(),
+    "dados_ativo":     lambda i: tool_dados_ativo(i["ticker"]),
+    "contexto_macro":  lambda _i: tool_contexto_macro(),
+    "calcular_desvio": lambda _i: tool_calcular_desvio(),
+    "importar_extrato": lambda i: tool_importar_extrato(i["texto"]),
+    "gravar_posicoes":  lambda i: tool_gravar_posicoes(i["posicoes"]),
 }
 
 
