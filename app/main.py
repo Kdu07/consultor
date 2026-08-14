@@ -13,6 +13,8 @@ from .api.chat import router as chat_router
 from .api.posicoes import router as posicoes_router
 from .api.snapshots import router as snapshots_router
 from .api.dashboard import router as dashboard_router
+from .api.rebalanceamento import router as rebalanceamento_router
+from .api.extrato import router as extrato_router
 from .seeds import seed_all
 
 # ---------------------------------------------------------------------------
@@ -79,6 +81,8 @@ app.include_router(chat_router)
 app.include_router(posicoes_router)
 app.include_router(snapshots_router)
 app.include_router(dashboard_router)
+app.include_router(rebalanceamento_router)
+app.include_router(extrato_router)
 
 # Serve arquivos estáticos (UI) de /static
 static_dir = Path(__file__).parent.parent / "static"

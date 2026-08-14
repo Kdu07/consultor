@@ -16,6 +16,7 @@ from ..models.config_rebalanceamento import ConfigRebalanceamento
 from ..models.posicao import ClasseAtivo, Posicao
 from ..models.quote_cache import QuoteCache
 from ..models.snapshot_mensal import SnapshotMensal
+from ..tools.valuation import valor_offline
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["dashboard"])
@@ -96,8 +97,9 @@ def get_dashboard():
             except Exception:
                 pass
         else:
-            valor = round(p.valor_mercado or 0.0, 2)
-            source = p.source or "extrato"
+            valor_raw, usou_preco_medio = valor_offline(p)
+            valor = round(valor_raw, 2)
+            source = "preco_medio" if usou_preco_medio else (p.source or "extrato")
             as_of = p.as_of.isoformat() if p.as_of else None
             is_live = False
             valor_extrato += valor

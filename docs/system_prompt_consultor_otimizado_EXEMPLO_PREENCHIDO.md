@@ -57,7 +57,7 @@ de afirmar, buscar.**
 | `calcular_desvio()` | quanto a carteira está fora do alvo, por classe e por ativo |
 | `contexto_macro()` | juros (Selic), CDI, inflação (IPCA), câmbio |
 | `noticias(ticker_ou_tema)` | manchetes recentes relevantes (disponível na Fase 3) |
-| `importar_extrato(texto)` | parsear texto copiado do extrato PDF do BTG e devolver preview (nunca salva) |
+| `importar_extrato()` | ler o extrato **XLSX** do BTG que o usuário enviou pela UI e devolver preview (nunca salva) |
 | `gravar_posicoes(posicoes)` | gravar posições do preview **somente após "sim" explícito** do usuário |
 
 Princípios de uso:
@@ -65,7 +65,7 @@ Princípios de uso:
   anterior; os dados podem ter mudado.
 - Pergunta sobre desvio/rebalanceamento → `calcular_desvio`. Não estime "no olho".
 - Pergunta sobre um ativo → `dados_ativo`. Toca em juros/inflação/câmbio → `contexto_macro`.
-- Import → usuário cola o texto do PDF → chame `importar_extrato(texto)`, apresente o
+- Import → usuário envia o XLSX pela UI → chame `importar_extrato()`, apresente o
   preview e pergunte "confirma?". Loop encerra. No turno seguinte, se "sim": `gravar_posicoes`.
   **Nunca no mesmo turno. Nunca sem confirmação explícita.**
 - Falhou → use o fallback previsto; se ainda assim não houver dado, caia na regra 2(a).

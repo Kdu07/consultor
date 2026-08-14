@@ -15,6 +15,7 @@ from ..database import engine
 from ..models.posicao import Posicao
 from ..models.snapshot_mensal import SnapshotMensal
 from ..models.quote_cache import QuoteCache
+from ..tools.valuation import valor_offline
 from ..config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -74,8 +75,8 @@ def criar_snapshot():
                 valor = p.quantidade * cached_price
                 source = "cache_ao_vivo"
             else:
-                valor = p.valor_mercado or 0.0
-                source = p.source or "extrato"
+                valor, usou_preco_medio = valor_offline(p)
+                source = "preco_medio" if usou_preco_medio else (p.source or "extrato")
 
             total += valor
             snapshot_posicoes.append({

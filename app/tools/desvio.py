@@ -26,6 +26,7 @@ from ..models.config_rebalanceamento import ConfigRebalanceamento
 from ..models.posicao import ClasseAtivo, Posicao
 from .ativo import tool_dados_ativo
 from .schemas import tool_error
+from .valuation import valor_offline
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +82,6 @@ async def _calcular() -> dict:
     # 2. Buscar preços ao vivo em paralelo (só para classes com cotação)
     # ------------------------------------------------------------------
     pos_ao_vivo = [p for p in posicoes if p.classe in _CLASSES_AO_VIVO and p.ticker]
-    pos_extrato  = [p for p in posicoes if p not in pos_ao_vivo]
 
     preco_results: list[dict] = []
     if pos_ao_vivo:
@@ -122,8 +122,8 @@ async def _calcular() -> dict:
             # Fallback para valor do extrato
             if res and "error" in res:
                 logger.warning("calcular_desvio: %s sem cotacao ao vivo — usando extrato", p.ticker)
-            valor = p.valor_mercado or 0.0
-            source = p.source or "extrato"
+            valor, usou_preco_medio = valor_offline(p)
+            source = "preco_medio" if usou_preco_medio else (p.source or "extrato")
             as_of_dt = p.as_of or now
             if as_of_dt.tzinfo is None:
                 as_of_dt = as_of_dt.replace(tzinfo=timezone.utc)
@@ -159,16 +159,23 @@ async def _calcular() -> dict:
 
     todas_classes = set(list(alvos_classe.keys()) + list(valores_classe.keys()))
     desvio_por_classe = []
+    classes_sem_alvo: list[str] = []
     for classe in sorted(todas_classes):
         val = valores_classe.get(classe, 0.0)
         atual_pct = val / valor_total * 100 if valor_total > 0 else 0.0
-        alvo_pct = alvos_classe.get(classe, 0.0)
-        desvio_pp = round(atual_pct - alvo_pct, 2)
-        desvio_reais = round(val - (alvo_pct / 100 * valor_total), 2)
+        # Classe sem alvo cadastrado (ex.: CAIXA, que veio da conta corrente do extrato):
+        # não tem alvo 0% — tem alvo indefinido. Tratar como 0% viraria "desvio de +100%"
+        # e o modelo poderia sugerir zerar o caixa. Por isso alvo e desvio ficam None.
+        sem_alvo = classe not in alvos_classe
+        if sem_alvo:
+            classes_sem_alvo.append(classe)
+        alvo_pct = alvos_classe.get(classe)
+        desvio_pp = round(atual_pct - alvo_pct, 2) if alvo_pct is not None else None
+        desvio_reais = round(val - (alvo_pct / 100 * valor_total), 2) if alvo_pct is not None else None
 
         flag_banda = None
         flag_relevante = None
-        if cfg and alvo_pct > 0:
+        if cfg and alvo_pct:
             flag_banda = _fora_da_banda(atual_pct, alvo_pct, cfg)
             flag_relevante = _acima_piso(desvio_reais, valor_total, cfg)
 
@@ -181,6 +188,7 @@ async def _calcular() -> dict:
             "desvio_reais": desvio_reais,
             "fora_da_banda": flag_banda,
             "acima_do_piso": flag_relevante,
+            "sem_alvo_definido": sem_alvo,
         })
 
     # ------------------------------------------------------------------
@@ -258,5 +266,12 @@ async def _calcular() -> dict:
         "nota_alvos_ativo": (
             "Alvos por ativo não definidos — desvio por ativo não calculado."
             if not alvos_ativo else None
+        ),
+        "classes_sem_alvo": classes_sem_alvo or None,
+        "nota_classes_sem_alvo": (
+            f"Sem alvo cadastrado para: {', '.join(classes_sem_alvo)}. "
+            "Estas classes entram no total da carteira, mas o desvio delas não é "
+            "calculado — alvo indefinido não é o mesmo que alvo 0%."
+            if classes_sem_alvo else None
         ),
     }

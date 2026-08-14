@@ -12,6 +12,7 @@ from .models import (
     AlvoClasse,
     ClasseAtivo,
 )
+from .models.estrategia import EstrategiaInvestimento
 
 logger = logging.getLogger(__name__)
 
@@ -62,9 +63,19 @@ def _seed_alvos_classe(session: Session) -> None:
     logger.info("AlvoClasse semeado: ACAO=30%%, FII=30%%, TESOURO=20%%, RF=20%%.")
 
 
+def _seed_estrategia(session: Session) -> None:
+    existing = session.exec(select(EstrategiaInvestimento)).first()
+    if existing:
+        return
+    estrategia = EstrategiaInvestimento(tese="", version=1)
+    session.add(estrategia)
+    logger.info("EstrategiaInvestimento semeada (tese vazia — a definir via chat).")
+
+
 def seed_all() -> None:
     with Session(engine) as session:
         _seed_config_rebalanceamento(session)
         _seed_perfil_risco(session)
         _seed_alvos_classe(session)
+        _seed_estrategia(session)
         session.commit()

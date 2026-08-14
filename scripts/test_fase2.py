@@ -34,9 +34,23 @@ def show(label: str, data: dict) -> None:
 
 
 # ── Teste 1: import ──────────────────────────────────────────────────
-extrato = Path("data/sample_btg.txt").read_text(encoding="utf-8")
-print("\n>>> Enviando extrato para importar_extrato...")
-r1 = chat(f"Importe este extrato do BTG para minha carteira:\n\n{extrato}")
+# O XLSX vai por upload (o binário nunca passa pelo chat) e fica em staging;
+# o agente então chama importar_extrato() sem argumentos.
+import httpx  # noqa: E402
+
+XLSX = Path(sys.argv[1] if len(sys.argv) > 1 else "uploads/001234567.xlsx")
+if not XLSX.exists():
+    sys.exit(f"Extrato nao encontrado: {XLSX}. Passe o caminho do XLSX como argumento.")
+
+print(f"\n>>> Enviando {XLSX.name} para POST /extrato/upload...")
+with XLSX.open("rb") as fh:
+    up = httpx.post(f"{BASE}/extrato/upload", files={"arquivo": (XLSX.name, fh)}, timeout=60)
+up.raise_for_status()
+preview = up.json()
+print(f"    {preview['total_posicoes']} posicoes | ref {preview['data_referencia']} "
+      f"| checksum_ok={preview['checagem_totais']['ok']}")
+
+r1 = chat("Importe o extrato que acabei de enviar.")
 show("TESTE 1: importar_extrato (preview)", r1)
 
 # ── Teste 2: confirmação ──────────────────────────────────────────────

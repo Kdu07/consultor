@@ -5,6 +5,8 @@ Endpoint: https://www.tesourodireto.com.br/json/br/com/b3/tesouro/bond/detail/Bo
 Preço de fim de dia (não tick ao vivo) — adequado à cadência mensal.
 """
 import logging
+import re
+import unicodedata
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -16,14 +18,31 @@ logger = logging.getLogger(__name__)
 
 _URL = "https://www.tesourodireto.com.br/json/br/com/b3/tesouro/bond/detail/BondDetailList.json"
 
-# Mapeamento de nomes parciais (uppercase) → ticker normalizado interno
-# O usuário pode referir "Tesouro IPCA+ 2035" ou "TESOURO IPCA+ 2035"
-_ALIAS: dict[str, str] = {}  # populado dinamicamente no primeiro fetch
+
+def _chave(nome: str) -> tuple[str, str]:
+    """
+    Nome do título → (tipo, ano). É assim que o casamento acontece (gap G4):
+    'Tesouro IPCA+ 2029' e 'TESOURO IPCA 2029' caem na mesma chave ('tesouro ipca', '2029'),
+    enquanto 'Tesouro IPCA+ com Juros Semestrais 2029' continua sendo outro título.
+
+    O nome vem do parser do extrato XLSX, que o monta a partir da sigla (LFT/LTN/NTNB-P)
+    e do vencimento exato — não há mais heurística de texto livre no meio do caminho.
+    """
+    n = unicodedata.normalize("NFKD", nome or "")
+    n = "".join(c for c in n if not unicodedata.combining(c))
+    n = n.lower().replace("+", " ")
+    m = re.search(r"\b(\d{4})\b", n)
+    ano = m.group(1) if m else ""
+    tipo = re.sub(r"\b\d{4}\b", " ", n)
+    tipo = re.sub(r"[^a-z ]", " ", tipo)
+    tipo = re.sub(r"\s+", " ", tipo).strip()
+    return tipo, ano
 
 
 class TesouroProvider:
     source = "tesouro"
-    _cache: dict[str, dict] = {}   # ticker normalizado → dados brutos
+    _cache: dict[str, dict] = {}                    # nome uppercase → dados brutos
+    _por_chave: dict[tuple[str, str], dict] = {}    # (tipo, ano) → dados brutos
     _fetched_at: Optional[datetime] = None
 
     def _fetch_all(self) -> bool:
@@ -42,13 +61,14 @@ class TesouroProvider:
                 return False
 
             self._cache.clear()
+            self._por_chave.clear()
             for item in titulos:
                 bond = item.get("TrsrBd", {})
                 nm = bond.get("nm", "")           # ex.: "Tesouro IPCA+ 2035"
-                key = nm.upper().strip()
-                self._cache[key] = bond
-                # Também indexa por nome simplificado
-                _ALIAS[key] = key
+                if not nm:
+                    continue
+                self._cache[nm.upper().strip()] = bond
+                self._por_chave[_chave(nm)] = bond
 
             self._fetched_at = datetime.now(timezone.utc)
             logger.info("TesouroProvider: %d títulos carregados.", len(self._cache))
@@ -58,14 +78,29 @@ class TesouroProvider:
             return False
 
     def _find(self, ticker: str) -> Optional[dict]:
-        """Busca tolerante: aceita nome completo ou parcial (case-insensitive)."""
+        """
+        Casamento por (tipo, ano) — determinístico. Cai para nome exato e depois para
+        busca parcial, que ainda atende quem digita 'IPCA 2029' no chat.
+        """
         key = ticker.upper().strip()
         if key in self._cache:
             return self._cache[key]
-        # busca parcial
+
+        tipo, ano = _chave(ticker)
+        if ano:
+            achado = self._por_chave.get((tipo, ano))
+            if achado:
+                return achado
+
         for k, v in self._cache.items():
             if key in k:
                 return v
+
+        if ano:
+            # último recurso: mesmo ano e tipos compatíveis por prefixo
+            for (t, a), v in self._por_chave.items():
+                if a == ano and (t.startswith(tipo) or tipo.startswith(t)):
+                    return v
         return None
 
     def quote(self, ticker: str) -> Optional[Quote]:
@@ -75,7 +110,12 @@ class TesouroProvider:
 
         bond = self._find(ticker)
         if not bond:
-            logger.warning("TesouroProvider: título não encontrado para '%s'", ticker)
+            # Não é erro fatal: o chamador cai para o valor do extrato. Acontece com
+            # título fora de negociação, que some da lista pública do Tesouro.
+            logger.warning(
+                "TesouroProvider: '%s' não está na lista do Tesouro Direto — "
+                "a posição vai valer pelo saldo do extrato.", ticker,
+            )
             return None
 
         try:

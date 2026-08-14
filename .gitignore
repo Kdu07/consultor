@@ -1,8 +1,15 @@
 # Segredos — nunca no repo
 .env
 
-# Banco de dados local
+# Extratos do BTG — dados pessoais (nome, CPF, agência/conta). Nunca no repo.
+*.xlsx
+*.xls
+# Exceção: a fixture de teste é anonimizada (nome/CPF/conta fictícios).
+!tests/fixtures/*.xlsx
+
+# Banco de dados local e seus backups
 data/
+backups/
 
 # Python
 __pycache__/
@@ -37,3 +44,6 @@ logs/
 
 # Uploads temporários
 uploads/
+
+# Frontend — dependências do Vite (o build em static/ é versionado)
+frontend/node_modules/

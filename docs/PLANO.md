@@ -6,7 +6,8 @@
 > com **yfinance apenas para validação/bootstrap e fallback** — a troca para a brapi é
 > prevista, não hipótese; **Tesouro Direto (preço diário oficial)** para a renda fixa
 > pública; **Banco Central (API SGS)** para macro e **RSS** para notícias;
-> **import de extrato por colagem de texto** (BTG emite apenas PDF — ver §7.1 e §7.4)
+> **import de extrato por upload do XLSX do BTG** (fonte única de verdade desde 08/2026;
+> o caminho por colagem de PDF foi aposentado — ver §7.1 e §7.4)
 > com gravação só após confirmação; **desvio calculado sobre snapshot coerente** com
 > divulgação de frescor; **loop do agente** com teto de iterações e tools que nunca
 > estouram; **Claude Sonnet 4.6** como modelo, **sem prompt caching** (decisão deliberada
@@ -62,7 +63,7 @@ pilares:
 | Modelo | claude-sonnet-4-6 | Melhor custo/qualidade para o consultor |
 | ORM | SQLModel | Pydantic + SQLAlchemy, pouco boilerplate |
 | Validação | Pydantic v2 | Schemas das tools e da confirmação de import |
-| Parser de extrato | `re` (regex stdlib) | Import por colagem de texto (PDF) — ver §7.1. `openpyxl`/`pandas` disponíveis se necessário no futuro |
+| Parser de extrato | `openpyxl` | Import do extrato XLSX do BTG — ver §7.4. Substituiu o parser de texto do PDF (regex) em 08/2026 |
 | Cliente HTTP | `httpx` | Async, timeouts, retries |
 | Cotações (RV) | `brapi` (primário planejado) → `yfinance` (validação/fallback) | brapi: paga/oficial; yfinance: gratuito, só validação (ver 6) |
 | Cotações (RF pública) | API / dado aberto do Tesouro Direto | Preço diário oficial; tira o Tesouro do "datado" (ver 6.7) |
@@ -96,7 +97,7 @@ turno só de texto. As definições do loop ficam explícitas (não implícitas)
   system prompt" basta e dificilmente encosta no limite). Loga tokens **por iteração**, não
   só por conversa.
 - **Confirmação como fronteira de turno, não pausa no loop.** O import é dois turnos:
-  (1) colagem do texto do PDF → `importar_extrato(texto)` devolve o preview parseado como
+  (1) upload do XLSX pela UI → `importar_extrato()` devolve o preview parseado como
   `tool_result` → o modelo apresenta "entendi isto: … confirma?" e o loop encerra (só
   texto); (2) o usuário confirma → o modelo chama uma tool **separada de escrita**
   (`gravar_posicoes`) → grava. Assim o guardrail "nunca grava sem confirmação" (guardrail 4)
@@ -241,13 +242,13 @@ ficar preso ao valor datado do extrato nem depender de plano pago.
 ### 7.1 Atualização
 BTG não tem API pública PF. Atualização **manual, cadência mensal**, com dois caminhos:
 - **Edição manual** das posições (`POST /posicoes`, built-in desde a Fase 1) — confiável e
-  simples; para ~15-30 posições leva poucos minutos por mês. Único caminho para RF privada
-  (CDB/LCI/LCA), que não aparece no texto do PDF.
-- **Import por colagem de texto** (Fase 2, operacional): BTG emite apenas PDF — **não há
-  XLSX**. O usuário abre o extrato no leitor de PDF, faz Ctrl+A (selecionar tudo) → Ctrl+C
-  (copiar) → cola na textarea "Importar extrato BTG" na UI. O parser extrai posições de RV
-  (ações, FIIs, ETFs) e Tesouro Direto, mostra o **preview para confirmação** antes de
-  gravar. Validado com extrato real 05/2026: 14/14 posições, total exato.
+  simples; útil para lançar o que não estiver no extrato.
+- **Import do extrato XLSX** (fonte única de verdade — ver 7.4): o BTG passou a exportar o
+  extrato da conta investimento em **XLSX**, e ele substituiu integralmente a colagem de
+  texto do PDF (parser de PDF removido em 08/2026). O usuário envia o arquivo pela UI, o
+  servidor parseia e o agente mostra o **preview para confirmação** antes de gravar.
+  Validado com extrato real 07/2026: 15/15 posições, conferidas contra o Sumário do próprio
+  extrato.
 - Cotações de ativos com ticker são sempre via `PriceProvider`, nunca digitadas.
 
 ### 7.2 Renda variável vs. renda fixa — decisão tomada
@@ -264,8 +265,11 @@ precificação difere por tipo**, e isso é explícito:
 
 ### 7.3 Modelo de dados (essencial)
 - `Posicao`: id, ticker (nullable), nome, classe (enum: ACAO, FII, ETF, BDR, RF, TESOURO,
-  FUNDO, CAIXA), quantidade, preco_medio, valor_mercado, source (brapi/yfinance/tesouro/
-  extrato), as_of.
+  FUNDO, CAIXA), quantidade, preco_medio (**custo de aquisição**), valor_mercado,
+  vencimento e taxa_contratada (renda fixa, vindos do XLSX), source (brapi/yfinance/
+  tesouro/extrato), as_of.
+  *(As colunas `vencimento` e `taxa_contratada` foram adicionadas em 08/2026 — bancos
+  anteriores migram com `scripts/migrate_posicao_rf.py`, que faz backup antes.)*
 - `AlvoClasse`: classe → percentual-alvo. (Soma = 100%.)
 - `AlvoAtivo`: ticker/identificador → percentual-alvo. (Ver 8.)
 - `ConfigRebalanceamento`: banda absoluta (p.p.), banda relativa (%), piso de irrelevância
@@ -274,16 +278,33 @@ precificação difere por tipo**, e isso é explícito:
 - `QuoteCache`: ver 6.4.
 - `SnapshotMensal`: data, JSON da carteira + valor total — histórico para análise.
 
-### 7.4 Como exportar o extrato do BTG (colagem de texto)
-O BTG **não oferece exportação em XLSX ou CSV** — apenas PDF. O fluxo para importar:
-1. **BTG web/app:** Investimentos → Extratos → "Extrato da Conta Investimento" → período desejado → abrir/baixar PDF.
-2. **No leitor de PDF** (Adobe, navegador, etc.): **Ctrl+A** (selecionar tudo) → **Ctrl+C** (copiar).
-3. **Na UI do consultor:** botão "Importar extrato BTG" → colar (Ctrl+V) na textarea → "Importar".
-4. O agente apresenta o preview → usuário confirma → `gravar_posicoes` salva.
+### 7.4 Como exportar e importar o extrato do BTG (XLSX)
+O BTG exporta o extrato da conta investimento em **XLSX** — é a **única fonte de verdade**
+do import (o caminho por PDF foi aposentado). Fluxo:
+1. **BTG web/app:** Investimentos → Extratos → "Extrato da Conta Investimento" → período → exportar em **XLSX**.
+2. **Na UI do consultor:** botão "Importar extrato BTG" → selecionar o arquivo → "Enviar extrato".
+3. O arquivo é parseado **no servidor** (`POST /extrato/upload`) e o preview fica em staging
+   — o binário nunca entra no contexto do modelo.
+4. O agente chama `importar_extrato()`, apresenta o preview → usuário confirma → `gravar_posicoes` salva.
 
-**O que é extraído:** ações, FIIs, ETFs, Tesouro Direto (LFT/LTN/NTNB-P).
-**O que NÃO é extraído:** RF privada (CDB/LCI/LCA) — não aparece como tabela estruturada no texto do PDF. Lance manualmente via `POST /posicoes`.
-**Parser state-machine** em `app/tools/btg_parser.py` (Tesouro: LFT→"Tesouro Selic YYYY", LTN→"Tesouro Prefixado YYYY", NTNB-P→"Tesouro IPCA+ YYYY").
+**O que é extraído:** ações, ETFs, fundos listados (FIIs), Tesouro Direto (LFT/LTN/NTNB-P),
+RF privada (qualquer emissor que não seja o BACEN) e o **saldo da conta corrente** (classe
+`CAIXA`). Além das posições, o preview traz proventos do mês, aluguel de ações, valores em
+trânsito e o comparativo com o mês anterior — informativos, não persistidos.
+
+**Ganhos do XLSX sobre o PDF:** custo real de aquisição do Tesouro (média ponderada dos
+lotes da aba de Detalhamento — antes gravava-se o preço atual como se fosse custo),
+**vencimento exato** e **taxa contratada** de cada título, e um **checksum** das posições
+contra a aba Sumário do próprio extrato.
+
+**Parser** em `app/tools/btg_xlsx_parser.py` (Tesouro: LFT→"Tesouro Selic YYYY",
+LTN→"Tesouro Prefixado YYYY", NTNB-P→"Tesouro IPCA+ YYYY"). Blocos são localizados por
+título e colunas por cabeçalho normalizado — nunca por índice fixo, porque o layout muda
+conforme o conteúdo do mês. Linha de posição não interpretada aparece em `linhas_ignoradas`;
+divergência de total vira aviso no preview (avisa, não bloqueia).
+
+**Privacidade:** o extrato traz nome, CPF e número da conta. `*.xlsx` está no `.gitignore`
+(exceto a fixture anonimizada de teste) e o binário não é gravado em disco pelo servidor.
 
 ---
 
@@ -343,7 +364,7 @@ resultado (coerente com o guardrail antialucinação).
 | Tool | Função | Fonte |
 |---|---|---|
 | `ler_carteira()` | posições atuais (com source/as_of) | SQLite |
-| `importar_extrato(texto)` | lê texto colado do PDF BTG, extrai, retorna **preview para confirmação** (não grava) | colagem |
+| `importar_extrato()` | lê o XLSX do BTG enviado pela UI, extrai, retorna **preview para confirmação** (não grava) | upload |
 | `gravar_posicoes(...)` | grava as posições **após confirmação explícita** (turno separado — ver §3 / guardrail 4) | SQLite |
 | `dados_ativo(ticker)` | preço, P/L, setor, variação | brapi → yfinance (fallback); `tesouro` p/ TD (+source) |
 | `noticias(ticker_ou_tema)` | manchetes recentes | RSS (+brapi p/ tickers cobertos) |
@@ -425,7 +446,10 @@ diários nesta etapa.**
 - Health-check em `/health` (testa yfinance, BCB e SQLite).
 - **Saída alcançada:** "como está minha carteira hoje?" respondido em 3 iterações, ~US$ 0,045/conversa.
 
-### Fase 1.5 — Spike do parser de colagem de texto ✅ CONCLUÍDO
+### Fase 1.5 — Spike do parser de colagem de texto ✅ CONCLUÍDO — ⚠️ SUPERADA em 08/2026
+> O BTG passou a exportar o extrato em XLSX e este caminho foi aposentado. Registro
+> histórico; o import atual está em "Migração do import para XLSX", abaixo.
+
 - **Decisão:** BTG não emite XLSX — apenas PDF. Adotada a **opção B (colagem de texto)**:
   usuário copia o texto do PDF (Ctrl+A / Ctrl+C no leitor) e cola numa textarea da UI.
 - Spike implementado em `scripts/spike_btg_parser.py` e validado contra extrato real (05/2026).
@@ -437,6 +461,9 @@ diários nesta etapa.**
   LFT→"Tesouro Selic YYYY", LTN→"Tesouro Prefixado YYYY", NTNB-P→"Tesouro IPCA+ YYYY".
 
 ### Fase 2 — Import + análise de carteira ✅ CONCLUÍDA (gap menor pendente)
+> O import desta fase (colagem de PDF) foi substituído pelo XLSX em 08/2026 — ver
+> "Migração do import para XLSX". O resto da fase (desvio, gravação) segue valendo.
+
 - `importar_extrato(texto)`: parser BTG integrado em `app/tools/btg_parser.py`, preview formatado por classe — nunca salva (guardrail 4 por arquitetura).
 - `gravar_posicoes(posicoes)`: upsert por ticker/nome, source="extrato", only no turno de confirmação.
 - `calcular_desvio()`: snapshot coerente (RV+Tesouro ao vivo via asyncio.gather, RF pelo extrato), desvio em p.p. e R$, flag de banda 5/25, fração ao-vivo/extrato, as_of mais antigo, data última atualização de posições.
@@ -470,6 +497,28 @@ diários nesta etapa.**
   histórico, a fonte mais fraca).
 - **Saída:** estratégia e planos versionados e injetados em toda sessão; what-if respondendo
   "se eu fizer X, como fica o desvio e as travas?".
+
+### Migração do import para XLSX ✅ CONCLUÍDA (08/2026)
+O BTG passou a exportar o extrato da conta investimento em **XLSX**, que virou a **fonte
+única de verdade** do import. Plano executado: [PLANO_XLSX.md](PLANO_XLSX.md).
+
+- **Parser novo** (`app/tools/btg_xlsx_parser.py`, `openpyxl`): lê Capa, Sumario, Renda
+  Variavel, Renda Fixa, Conta Corrente e Valores em Trânsito. Parser de PDF removido.
+- **Fluxo novo:** `POST /extrato/upload` (multipart) parseia no servidor e guarda o preview
+  em staging (`app/tools/extrato_staging.py`); `importar_extrato()` passou a **não receber
+  argumentos**. O binário nunca entra no contexto do modelo.
+- **Dados que só o XLSX dá:** custo real de aquisição do Tesouro (média ponderada dos lotes
+  — antes gravava-se o preço atual como custo), `vencimento` e `taxa_contratada` (colunas
+  novas em `Posicao`; migração em `scripts/migrate_posicao_rf.py`), saldo em conta corrente
+  como classe `CAIXA`, proventos do mês e comparativo com o mês anterior.
+- **Antialucinação no import:** checksum das posições contra a aba Sumario do próprio
+  extrato + `linhas_ignoradas` para toda linha não interpretada. Divergência **avisa**, não
+  bloqueia — e o system prompt manda o agente contar isso ao usuário.
+- **G4 resolvido:** com o vencimento exato, o `TesouroProvider` casa por (tipo, ano) em vez
+  de heurística de texto.
+- **Validação:** extrato real 07/2026 → 15/15 posições, R$ ***, checksum ok.
+  34 testes verdes (`tests/test_btg_xlsx_parser.py`, `test_extrato_upload.py`,
+  `test_tesouro_matching.py`, `test_import_fim_a_fim.py`).
 
 ### Transição planejada — yfinance (validação) → brapi (produção)
 - Não é opcional: faz parte do plano. Validar a pipeline em modo yfinance (R$ 0) →
@@ -507,7 +556,7 @@ aberto.
 | yfinance instável (fonte não-oficial, usada só p/ validação/fallback) | brapi é a primária planejada de produção; yfinance recua a fallback; + cache stale + "não tenho dado" + health-check |
 | Loop do agente não terminar / custo disparar | teto de iterações `MAX_ITERS` (§3); tools nunca estouram (tool-results estruturados de erro) |
 | Desvio contaminado por dado datado | snapshot coerente + Tesouro ao vivo (6.7) + divulgação de fração ao-vivo/extrato e as_of mais antigo (8.1) |
-| Parser de extrato (colagem PDF) | Spike validado com extrato real 05/2026: 14/14 posições corretas. Limitação conhecida: RF privada não estruturada no PDF → edição manual. Se o BTG mudar o layout do PDF, o parser pode quebrar — monitorar e corrigir os markers. |
+| Parser de extrato (XLSX) | Validado com extrato real 07/2026: 15/15 posições, conferidas contra a aba Sumário do próprio extrato. Se o BTG mudar o layout, o import fica ruidoso em vez de silenciosamente errado: blocos são achados por título e colunas por cabeçalho, linhas não interpretadas aparecem em `linhas_ignoradas` e o checksum acusa a divergência. |
 | Perder o arquivo SQLite | Backup local + cópia em nuvem + restauração testada |
 | Bit rot (libs/formato mudam) | Logs + health-check + lockfile `uv`. Ter a brapi (oficial) como primária reduz o bit rot de fonte não-oficial; yfinance fica de fallback |
 | Renda fixa sem cotação pública (CDB/LCI/LCA/fundos) | Valor do extrato com source/as_of + aviso de dado datado. Tesouro **não** entra aqui: tem preço diário oficial (6.7) |
@@ -524,7 +573,8 @@ aberto.
 | Gap | Descrição | Quando resolver |
 |---|---|---|
 | G2 — Retry HTTP | PLANO §11 diz "1 retry"; só timeout implementado. Cache absorve falhas transitórias. | Fase 3 ou quando houver instabilidade observada |
-| G4 — TesouroProvider nomes | Parser BTG gera "Tesouro Selic 2028"; endpoint do Tesouro pode ter sufixos/variações. Fallback para extrato funciona. | Validar com próximo import real; corrigir busca parcial se necessário |
+| ~~G4 — TesouroProvider nomes~~ | ✅ **Resolvido em 08/2026** com a migração para XLSX: o extrato traz o vencimento exato, e o casamento passou a ser por (tipo, ano) — determinístico. Coberto por `tests/test_tesouro_matching.py`. | — |
+| G7 — Endpoint do Tesouro fora do ar | O JSON público do Tesouro Direto (`tesourodireto.com.br/json/.../BondDetailList.json`) passou a responder **403** (bloqueio de origem, não é o User-Agent — testado). Consequência: títulos do Tesouro valem pelo **saldo do extrato**, não pelo preço diário oficial. A degradação é a prevista (§6.7) e o XLSX traz preço unitário datado, então o impacto é pequeno. | Avaliar migrar para o dado aberto do **Tesouro Transparente (CKAN)**, que responde 200 — decisão do dono, não executado |
 | G5 — AlvoAtivo vazio | Alvos por ativo individual não configurados. `calcular_desvio` retorna desvio nulo por ativo. | Usuário define conforme monta carteira de referência |
 | G6 — Health check sem Tesouro | `/health` não testa o endpoint do Tesouro Direto. | Fase 3 (junto com outros ajustes de observabilidade) |
 

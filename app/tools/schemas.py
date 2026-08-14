@@ -108,55 +108,189 @@ TOOL_DEFINITIONS: list[dict] = [
     {
         "name": "importar_extrato",
         "description": (
-            "Parseia o texto copiado do extrato PDF da conta de investimento do BTG "
-            "(seções: Ações, ETF, Fundos Listados, Tesouro Direto). "
-            "Retorna PREVIEW com as posições extraídas — NÃO salva nada. "
-            "Após apresentar o preview ao usuário e receber 'sim' explícito, "
-            "chame gravar_posicoes para gravar. NUNCA grave sem confirmação."
+            "Lê o extrato XLSX da conta de investimento do BTG que o usuário enviou pela "
+            "interface (ações, ETFs, fundos listados, Tesouro Direto, renda fixa privada "
+            "e saldo em conta corrente). Não recebe argumentos — o arquivo é enviado pela UI. "
+            "Retorna PREVIEW com as posições, os proventos do mês, o comparativo com o mês "
+            "anterior e a conferência de totais contra o Sumário do extrato — NÃO salva nada. "
+            "Se a conferência de totais falhar ou houver 'linhas_ignoradas', DIGA isso ao "
+            "usuário antes de propor a gravação. "
+            "Após apresentar o preview e receber 'sim' explícito, chame gravar_posicoes. "
+            "NUNCA grave sem confirmação. Se nenhum extrato foi enviado, a tool avisa — "
+            "peça ao usuário para usar o botão 'Importar extrato BTG' na interface."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
+        "name": "atualizar_estrategia",
+        "description": (
+            "Persiste mudanças na tese de investimento e/ou nos planos futuros. "
+            "SOMENTE chame após o usuário confirmar explicitamente com 'sim' ou equivalente — "
+            "nunca no mesmo turno em que você propôs a mudança. "
+            "Aceita qualquer combinação de: 'tese' (string), 'planos_adicionar' (lista), "
+            "'planos_atualizar' (lista com 'id'), 'planos_remover' (lista de ids). "
+            "Retorna {ok, version_nova, resumo} em sucesso."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "texto": {
+                "tese": {
                     "type": "string",
-                    "description": (
-                        "Texto completo copiado do extrato PDF do BTG "
-                        "(selecionar tudo Ctrl+A e copiar Ctrl+C no leitor de PDF)."
-                    ),
+                    "description": "Nova tese narrativa de investimento (substitui a atual).",
+                },
+                "planos_adicionar": {
+                    "type": "array",
+                    "description": "Planos futuros a adicionar.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "descricao": {"type": "string"},
+                            "gatilho": {"type": "string"},
+                            "horizonte": {"type": "string"},
+                        },
+                        "required": ["descricao"],
+                    },
+                },
+                "planos_atualizar": {
+                    "type": "array",
+                    "description": "Planos existentes a atualizar (requer 'id').",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "integer"},
+                            "descricao": {"type": "string"},
+                            "gatilho": {"type": "string"},
+                            "horizonte": {"type": "string"},
+                            "status": {"type": "string", "enum": ["ativo", "cumprido", "cancelado"]},
+                        },
+                        "required": ["id"],
+                    },
+                },
+                "planos_remover": {
+                    "type": "array",
+                    "description": "IDs de planos a cancelar.",
+                    "items": {"type": "integer"},
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "proposta_rebalanceamento",
+        "description": (
+            "Simula operações hipotéticas de compra/venda sobre o snapshot atual da carteira "
+            "e calcula como ficaria a alocação vs. alvos (what-if de pré-trade). "
+            "Não altera o banco — análise pura. "
+            "Retorna por_classe e por_ativo com percentuais hipotéticos, delta vs. atual, "
+            "desvio vs. alvo e flag fora_da_banda_hip. "
+            "Inclui fracao_liquida_pct (ACAO+ETF+FII+BDR+CAIXA+TESOURO / total) para checar a trava de liquidez. "
+            "Use quando o usuário perguntar 'se eu comprar X / vender Y, como fica minha carteira?'"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "operacoes": {
+                    "type": "array",
+                    "description": "Lista de operações hipotéticas a simular.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "acao": {
+                                "type": "string",
+                                "enum": ["comprar", "vender"],
+                                "description": "'comprar' ou 'vender'",
+                            },
+                            "ticker": {
+                                "type": "string",
+                                "description": "Ticker B3 (ex: PETR4). Opcional se nome informado.",
+                            },
+                            "nome": {
+                                "type": "string",
+                                "description": "Nome do ativo (para RF sem ticker).",
+                            },
+                            "classe": {
+                                "type": "string",
+                                "description": "Classe do ativo (ACAO, FII, ETF, BDR, RF, TESOURO, FUNDO, CAIXA).",
+                            },
+                            "quantidade": {
+                                "type": "number",
+                                "description": "Quantidade de cotas/ações a comprar ou vender.",
+                            },
+                            "preco": {
+                                "type": "number",
+                                "description": "Preço unitário hipotético (R$) para a operação.",
+                            },
+                        },
+                        "required": ["acao", "quantidade", "preco"],
+                    },
                 }
             },
-            "required": ["texto"],
+            "required": ["operacoes"],
+        },
+    },
+    {
+        "name": "sugerir_rebalanceamento",
+        "description": (
+            "Gera sugestões consultivas de rebalanceamento da carteira. "
+            "Internamente chama calcular_desvio e filtra apenas os itens fora da banda 5/25 "
+            "e acima do piso de irrelevância. "
+            "Retorna sugestoes_por_classe e sugestoes_por_ativo com ação (REDUZIR/AUMENTAR), "
+            "valor_a_mover (R$), percentuais e razão. "
+            "status='dentro_da_banda' → carteira OK; 'rebalanceamento_sugerido' → há ajustes a avaliar. "
+            "Use quando o usuário pedir sugestões de rebalanceamento ou revisão mensal."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
         },
     },
     {
         "name": "gravar_posicoes",
         "description": (
-            "Salva as posições do preview no banco de dados. "
+            "Salva no banco as posições do extrato que o usuário enviou pela UI. "
             "SOMENTE chame após o usuário confirmar explicitamente com 'sim' ou equivalente. "
-            "Nunca chame no mesmo turno que importar_extrato — a confirmação é um turno separado."
+            "Nunca chame no mesmo turno que importar_extrato — a confirmação é um turno separado. "
+            "Não repita as posições no argumento: a tool lê o preview do extrato direto do "
+            "servidor, com os valores exatos. Chame sem argumentos. "
+            "O extrato é a carteira COMPLETA na data de referência: posições que não aparecem "
+            "nele saem da carteira e voltam em 'posicoes_desativadas' — sempre relate essa "
+            "lista ao usuário, pode ser venda/resgate ou ativo fora do BTG. "
+            "'posicoes_reativadas' traz o caminho inverso: papel que tinha saído e voltou."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "posicoes": {
                     "type": "array",
-                    "description": "Lista de posições exatamente como retornado por importar_extrato.",
+                    "description": (
+                        "Opcional e normalmente desnecessário. Só use para gravação manual, "
+                        "quando não há extrato enviado pela UI. Havendo extrato em staging, "
+                        "ele prevalece sobre esta lista."
+                    ),
                     "items": {
                         "type": "object",
                         "properties": {
-                            "ticker":        {"type": "string"},
-                            "nome":          {"type": "string"},
-                            "classe":        {"type": "string"},
-                            "quantidade":    {"type": "number"},
-                            "preco_medio":   {"type": "number"},
-                            "valor_mercado": {"type": "number"},
-                            "as_of":         {"type": "string"},
+                            "ticker":          {"type": "string"},
+                            "nome":            {"type": "string"},
+                            "classe":          {"type": "string"},
+                            "quantidade":      {"type": "number"},
+                            "preco_medio":     {"type": "number"},
+                            "valor_mercado":   {"type": "number"},
+                            "as_of":           {"type": "string"},
+                            "vencimento":      {"type": "string", "description": "Renda fixa: vencimento ISO (YYYY-MM-DD)."},
+                            "taxa_contratada": {"type": "string", "description": "Renda fixa: taxa do extrato (ex.: 'IPCA + 7,62%')."},
+                            "custo_total":     {"type": "number", "description": "Renda fixa: valor total de aquisição."},
                         },
                         "required": ["nome", "classe", "quantidade", "valor_mercado"],
                     },
                 }
             },
-            "required": ["posicoes"],
+            "required": [],
         },
     },
 ]

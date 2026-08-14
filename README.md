@@ -1,1 +1,93 @@
 # Consultor de IA para Finanças
+
+Agente consultor financeiro pessoal, **local** e single-user. Roda em `127.0.0.1:8000`,
+é **estritamente consultivo** (nunca executa ordens) e **nunca inventa número**: todo dado
+que chega a você vem de uma tool, com fonte e data.
+
+Documento de arquitetura: [docs/PLANO.md](docs/PLANO.md).
+
+## Rodar
+
+```powershell
+# Servidor
+.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+
+# Testes
+.venv\Scripts\python.exe -m pytest tests/ -q
+```
+
+Abra `http://127.0.0.1:8000`. O banco fica em `data/carteira.db` (config em `app/config.py`).
+A chave da API vai no `.env` (veja `.env.example`) — nunca no repositório.
+
+## Frontend
+
+A interface é um app React (Vite + TypeScript + Tailwind) em `frontend/`. O build sai em
+`static/` e é servido pelo próprio FastAPI — **`static/index.html` e `static/assets/` são
+gerados, não edite à mão**.
+
+```powershell
+cd frontend
+npm install          # primeira vez
+
+npm run build        # gera static/ — obrigatório após qualquer mudança na UI
+npm run dev          # http://127.0.0.1:5173, hot reload, /api proxiada para a :8000
+```
+
+No modo `dev` o uvicorn precisa estar de pé na 8000 — o Vite encaminha `/chat`,
+`/dashboard`, `/extrato` e as demais rotas para ele.
+
+O chat consome `POST /chat/stream` (SSE): a resposta aparece token a token e a UI mostra
+qual tool está rodando. `POST /chat` continua existindo, com a resposta inteira de uma vez,
+para scripts e testes.
+
+## Importar o extrato do BTG
+
+O extrato **XLSX** é a única fonte de verdade das posições.
+
+1. No BTG (web ou app): **Investimentos → Extratos → Extrato da Conta Investimento →**
+   escolher o período → **exportar em XLSX**.
+2. Na interface do consultor: botão **"Importar extrato BTG"** → selecionar o arquivo →
+   **"Enviar extrato"**.
+3. O agente mostra o preview (posições, totais, proventos do mês, conferência de totais).
+   **Nada é salvo ainda.**
+4. Responda **"sim"** no chat para gravar.
+
+O que é importado: ações, ETFs, FIIs, Tesouro Direto, renda fixa privada e o saldo da conta
+corrente (classe `CAIXA`). Proventos, aluguel de ações e valores em trânsito aparecem no
+preview como informação, mas não são gravados.
+
+Se o total das posições não bater com o Sumário do próprio extrato, o preview avisa — vale
+conferir antes de confirmar.
+
+> **Privacidade:** o extrato contém nome, CPF e número da conta. `*.xlsx` está no
+> `.gitignore` e o servidor não grava o arquivo em disco. Guarde os extratos em `uploads/`
+> (também ignorado).
+
+## Backup e restauração
+
+O banco é um único arquivo SQLite — é a carteira inteira.
+
+```powershell
+# Backup (método seguro, funciona com o banco em uso)
+.venv\Scripts\python.exe -c "import sqlite3; o=sqlite3.connect('data/carteira.db'); d=sqlite3.connect('backups/carteira-manual.db'); o.backup(d); d.close(); o.close()"
+```
+
+**Restaurar:** pare o servidor e copie o arquivo de backup por cima de `data/carteira.db`.
+
+A migração de schema (`scripts/migrate_posicao_rf.py`) faz backup automático em `backups/`
+antes de alterar qualquer coisa.
+
+## Estrutura
+
+| Pasta | O que tem |
+|---|---|
+| `app/agent/` | loop do agente (tool-use) e builder do system prompt |
+| `app/api/` | endpoints REST (chat, posições, extrato, dashboard, health, ...) |
+| `app/tools/` | as tools do agente — cada uma devolve `{dados, source, as_of}` ou `{error}` |
+| `app/providers/` | fontes de preço (yfinance, brapi, Tesouro) |
+| `app/models/` | tabelas SQLModel |
+| `docs/` | PLANO.md (arquitetura), system prompt e planos de trabalho |
+| `scripts/` | utilitários de manutenção e testes manuais contra o servidor |
+
+> **Disclaimer:** conteúdo educacional/informativo. Não é recomendação de investimento.
+> As decisões — e a responsabilidade por elas — são suas.

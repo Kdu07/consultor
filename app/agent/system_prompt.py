@@ -12,6 +12,7 @@ from sqlmodel import Session, select
 from ..database import engine
 from ..models.alvo import AlvoAtivo, AlvoClasse
 from ..models.config_rebalanceamento import ConfigRebalanceamento
+from ..models.estrategia import EstrategiaInvestimento, PlanoFuturo, StatusPlano
 from ..models.perfil_risco import PerfilRisco
 
 logger = logging.getLogger(__name__)
@@ -86,6 +87,35 @@ def _build_dynamic(session: Session) -> str:
     lines.append(config_txt)
     lines.append("\n## Observações do usuário\n")
     lines.append(obs_livres)
+
+    # --- Tese da estratégia ---
+    estrategia = session.exec(select(EstrategiaInvestimento)).first()
+    tese_txt = estrategia.tese.strip() if estrategia and estrategia.tese.strip() else "(tese de investimento não definida ainda)"
+    version_txt = f" (v{estrategia.version})" if estrategia else ""
+    lines.append(f"\n## Tese da estratégia{version_txt}\n")
+    lines.append(tese_txt)
+
+    # --- Planos futuros ativos ---
+    planos = (
+        session.exec(
+            select(PlanoFuturo).where(PlanoFuturo.status == StatusPlano.ATIVO)
+        ).all()
+        if estrategia else []
+    )
+    if planos:
+        planos_lines = []
+        for p in planos:
+            linha = f"- [id={p.id}] {p.descricao}"
+            if p.gatilho:
+                linha += f" | gatilho: {p.gatilho}"
+            if p.horizonte:
+                linha += f" | horizonte: {p.horizonte}"
+            planos_lines.append(linha)
+        lines.append("\n## Planos futuros\n")
+        lines.append("\n".join(planos_lines))
+    else:
+        lines.append("\n## Planos futuros\n")
+        lines.append("(nenhum plano futuro registrado)")
 
     return "\n".join(lines)
 
