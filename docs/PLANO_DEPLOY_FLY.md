@@ -551,7 +551,20 @@ continua em aberto, como previsto.
   e 200 depois do login, `/docs` e `/openapi.json` inacessíveis, cookie com
   `Secure`+`HttpOnly`+`SameSite=Lax`, `journal_mode=wal`.
 
-O que **não** foi validado: o build da imagem (o Docker Desktop está instalado mas o daemon
-está parado; quem constrói no deploy é o builder remoto do Fly de qualquer forma — para
-conferir antes, suba o Docker Desktop e rode `docker build -t consultor .`) e tudo que
-depende da sua conta no Fly.
+### A imagem foi construída e rodada localmente (13/08/2026)
+
+`docker build -t consultor:local .` passa. O contêiner foi levantado como roda no Fly
+(`ENV=production`, volume em `/data`, `DATABASE_URL=sqlite:////data/carteira.db`):
+
+- boot limpo, seeds lendo `docs/perfil_risco_investidor.md` de dentro da imagem — o
+  `COPY docs/` está certo;
+- `/health/live` 200 · `/dashboard` 401 · `/` 200 · `/docs` 401 · asset do Vite
+  (`/static/assets/index-*.css`) 200 · login com senha errada 401, correta 200;
+- **imagem de 908 MB** (o `pandas`/`numpy` do yfinance é a maior fatia). Fica abaixo dos
+  ~1,5 GB estimados em §5: o rootfs suspenso custa ~US$ 0,14/mês, não US$ 0,20.
+- `ls /data` depois do boot mostra `carteira.db`, `carteira.db-shm` e **`carteira.db-wal`**
+  — a confirmação prática de por que o passo 7 apaga os três antes de mover o banco novo.
+
+O que só pode ser feito com a sua conta: `fly auth login` (navegador + cartão) e tudo o que
+vem depois — §4, passos 1 a 10. O `flyctl` v0.4.83 já está instalado em
+`%USERPROFILE%\.fly\bin\flyctl.exe`.
