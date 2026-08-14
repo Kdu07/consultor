@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 
 from .config import get_settings
 from .database import create_tables
+from .auth import configurar_auth, router as auth_router
 from .api.health import router as health_router
 from .api.chat import router as chat_router
 from .api.posicoes import router as posicoes_router
@@ -69,13 +70,22 @@ async def lifespan(app: FastAPI):
 # App
 # ---------------------------------------------------------------------------
 
+_settings = get_settings()
+
 app = FastAPI(
     title="Consultor Financeiro Pessoal",
     description="Agente consultivo local — single-user.",
     version="0.1.0",
     lifespan=lifespan,
+    # Em produção a documentação interativa não tem por que ficar exposta.
+    docs_url=None if _settings.is_production else "/docs",
+    redoc_url=None if _settings.is_production else "/redoc",
+    openapi_url=None if _settings.is_production else "/openapi.json",
 )
 
+configurar_auth(app)
+
+app.include_router(auth_router)
 app.include_router(health_router)
 app.include_router(chat_router)
 app.include_router(posicoes_router)

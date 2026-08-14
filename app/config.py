@@ -25,6 +25,23 @@ class Settings(BaseSettings):
     # Mude para "brapi" quando contratar o plano e preencher BRAPI_TOKEN
     price_provider: str = "yfinance"
 
+    # Ambiente: "development" (local) ou "production" (Fly). Em produção o
+    # /docs e o /redoc são desligados e o cookie de sessão exige HTTPS.
+    env: str = "development"
+
+    # Autenticação (produção). Com app_password vazio o app roda aberto —
+    # é o modo local de sempre; no Fly os dois são obrigatórios (secrets).
+    app_password: str = ""
+    session_secret: str = ""
+
+    @property
+    def is_production(self) -> bool:
+        return self.env.lower() == "production"
+
+    @property
+    def auth_enabled(self) -> bool:
+        return bool(self.app_password)
+
 
 @lru_cache
 def get_settings() -> Settings:

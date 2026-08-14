@@ -1,8 +1,13 @@
 # Plano de deploy no Fly.io — Consultor Financeiro Pessoal
 
-Rev. 2 — 11/08/2026
+Rev. 3 — 13/08/2026
 Alternativa a `PLANO_DEPLOY_VERCEL.md` — este é o caminho recomendado.
 
+> **O que mudou da rev. 2:** os Blocos A, B e C foram **implementados** — ver §8,
+> "Estado da execução". O plano em si continua válido; as diferenças entre o que
+> estava escrito e o que ficou no código estão listadas lá. O que falta é só a
+> parte manual (§4, passos 1 a 10), que depende da sua conta no Fly.
+>
 > **O que mudou da rev. 1:** o plano foi conferido linha a linha contra o código atual.
 > Três coisas estavam erradas e foram corrigidas: (a) `itsdangerous` **não** vem com o
 > Starlette — é dependência nova e obriga um `uv lock`; (b) o `Dockerfile` copiava
@@ -355,28 +360,47 @@ Ao final: `fly status` deve mostrar **1** máquina `started` em `gru`, e
 O app já terá criado um `carteira.db` vazio com os seeds. Substitua pelo seu:
 
 ```powershell
-# 1. Backup local
-Copy-Item data\carteira.db "backups\carteira-pre-fly-$(Get-Date -f yyyyMMdd).db"
+# 1. Checkpoint do WAL + integrity_check + backup em backups\
+#    (obrigatório: o banco local roda em WAL desde o Bloco B)
+uv run python scripts/preparar_db_para_upload.py
 
-# 2. Parar a máquina para ninguém escrever durante a cópia
+# 2. Enviar para um nome temporário (a máquina PRECISA estar rodando)
 fly machine list
-fly machine stop <ID-DA-MAQUINA>
-
-# 3. Enviar o arquivo
 fly ssh sftp shell
 # no prompt do sftp:
-#   put data/carteira.db /data/carteira.db
+#   put data/carteira.db /data/carteira.novo.db
 #   quit
 
-# 4. Subir de novo
-fly machine start <ID-DA-MAQUINA>
+# 3. Trocar no lugar, levando junto o -wal e o -shm do banco vazio
+fly ssh console -C "sh -c 'rm -f /data/carteira.db /data/carteira.db-wal /data/carteira.db-shm && mv /data/carteira.novo.db /data/carteira.db'"
+
+# 4. Reiniciar para o app abrir o arquivo novo
+fly machine restart <ID-DA-MAQUINA>
 ```
 
-Hoje o banco local **não** está em modo WAL (o Bloco B liga o WAL só no servidor), então
-a cópia é direta. Mas se você rodar o app com WAL antes de migrar, rode um
-`PRAGMA wal_checkpoint(TRUNCATE)` — senão você copia um `.db` sem as últimas escritas,
-que ficaram no `-wal`. Eu incluo isso no `scripts/preparar_db_para_upload.py`, que
-funciona nos dois casos.
+Duas correções em relação ao que a rev. 2 mandava fazer aqui, e as duas doem se
+ignoradas:
+
+- **Não pare a máquina antes.** `fly ssh` (sftp inclusive) fala com uma máquina *rodando* —
+  com ela parada, o upload simplesmente não acontece. O que protege a cópia não é a máquina
+  estar parada, é você fazer isto **antes de começar a usar o app publicado**.
+- **Apague o `-wal` e o `-shm` junto.** O primeiro deploy já subiu um banco vazio em WAL.
+  Trocar só o `.db` deixaria para trás o WAL do banco antigo ao lado do arquivo novo — na
+  melhor das hipóteses ele é ignorado, na pior você abre um banco inconsistente. Remover os
+  três e mover o novo por cima elimina a dúvida. Apagar o `.db` com o processo segurando o
+  arquivo é seguro no Linux (o inode vive até o restart do passo 4).
+
+O passo 1 não é burocracia: com o WAL ligado, as últimas escritas ficam em
+`carteira.db-wal` até o checkpoint. Copiar só o `.db` perderia esses dados **sem avisar**.
+O script faz o `PRAGMA wal_checkpoint(TRUNCATE)`, confere a integridade e funciona
+igualmente se o banco ainda estiver em journal clássico. Ele avisa se o uvicorn estiver
+de pé segurando o banco — feche antes de rodar.
+
+Confira o resultado antes de seguir:
+
+```powershell
+fly ssh console -C "ls -la /data"
+```
 
 ### Passo 8 — Backup recorrente
 
@@ -385,6 +409,9 @@ documentação avisa que **podem não conter os dados mais recentes**. Não conf
 como único backup.
 
 ```powershell
+# Checkpoint antes de baixar — no servidor o banco também roda em WAL, e um
+# `get` cru do .db deixaria as últimas escritas para trás.
+fly ssh console -C "python -c \"import sqlite3; c=sqlite3.connect('/data/carteira.db'); c.execute('PRAGMA wal_checkpoint(TRUNCATE)'); c.close()\""
 fly ssh sftp get /data/carteira.db "backups\carteira-$(Get-Date -f yyyyMMdd).db"
 ```
 
@@ -395,7 +422,8 @@ retenção dos snapshots para 30 dias no dashboard (Volumes → Snapshots).
 
 Com `https://consultor.fly.dev`:
 
-1. `/health` responde, com `db.ok = true` e — torcendo — `bcb` e o Tesouro verdes.
+1. `/health/live` responde `{"status":"ok"}` sem senha. O `/health` completo (com `bcb` e
+   Tesouro) é rota protegida — abra depois de logar, na mesma janela.
 2. Login com a `APP_PASSWORD`; janela anônima deve pedir senha. Confirme também que
    `GET /dashboard` sem cookie devolve 401 (`curl -i https://consultor.fly.dev/dashboard`)
    — é o teste que realmente prova o Bloco C.
@@ -477,3 +505,53 @@ Conferido contra o repositório em 11/08/2026, para que ninguém tenha que refaz
 | Streaming sobrevive ao cookie de sessão | ✅ `frontend/src/lib/api.ts:156` usa `fetch` POST, que envia cookie de mesma origem por padrão |
 | Limite de upload de 5 MB | ✅ `app/api/extrato.py:19` |
 | Rotas a liberar na auth | ✅ Routers registrados em `app/main.py`: health, chat, posicoes, snapshots, dashboard, rebalanceamento, extrato |
+
+---
+
+## 8. Estado da execução (rev. 3 — 13/08/2026)
+
+Blocos A, B e C implementados. Bloco D (imagem enxuta, backup e snapshot agendados)
+continua em aberto, como previsto.
+
+| Bloco | Arquivos |
+|---|---|
+| A — empacotamento | `Dockerfile`, `.dockerignore`, `fly.toml` (os três novos, como escritos em §2) |
+| B — ajustes | `app/api/health.py`, `app/database.py`, `app/main.py`, `app/config.py`, `.env.example` |
+| C — autenticação | `app/auth.py` (novo), `frontend/src/components/Login.tsx` (novo), `frontend/src/lib/api.ts`, `frontend/src/App.tsx`, `pyproject.toml` + `uv.lock` |
+| Apoio | `scripts/preparar_db_para_upload.py`, `tests/test_auth.py` |
+
+### Onde o código ficou diferente do plano
+
+1. **WAL vale também no local, não só no servidor.** O plano dizia "o Bloco B liga o WAL
+   só no servidor"; `app/database.py` liga para qualquer SQLite, porque o problema
+   (uvicorn atendendo em threads) é o mesmo nas duas pontas. Consequência prática: o
+   **passo 7 passa a exigir** `uv run python scripts/preparar_db_para_upload.py` antes de
+   enviar o `.db` — o script faz `wal_checkpoint(TRUNCATE)`, roda `integrity_check`,
+   guarda uma cópia em `backups/` e imprime os comandos do `sftp`.
+2. **`/health` completo é rota protegida; só `/health/live` é livre.** Segue a lista do
+   Bloco C à risca. Efeito colateral no **passo 9.1**: `fly open /health` só responde
+   depois do login na mesma janela — para checar sem sessão, use `/health/live`.
+3. **Três rotas livres a mais do que a lista original**: `/logout`, `/auth/status` e
+   `/favicon.ico`. O `/auth/status` é o que permite ao frontend saber, no boot, se deve
+   desenhar a tela de senha ou a aplicação.
+4. **`ENV=production` sem `APP_PASSWORD`/`SESSION_SECRET` não sobe** — `configurar_auth()`
+   levanta `RuntimeError` no boot. É deliberado: uma URL pública aberta é pior que um
+   deploy que falha na cara.
+5. **`AuthGuardMiddleware` é ASGI puro**, não `BaseHTTPMiddleware`. O chat responde em SSE
+   e envolver o corpo em mais uma camada de streaming só traria risco de buffering.
+6. **`openapi_url` também é desligado em produção**, além de `docs_url` e `redoc_url`.
+
+### Validação local já feita
+
+- `uv run pytest -q` → 43 testes passando antes do Bloco C; `tests/test_auth.py`
+  acrescenta 8 (401 sem cookie, `/health/live` livre, senha errada, login, logout,
+  `/auth/status`, app aberto sem senha, boot barrado em produção sem senha).
+- `npm run build --prefix frontend` → build limpo, `static/` regenerado.
+- Smoke do app real com `ENV=production`: `/health/live` 200, `/dashboard` 401 sem cookie
+  e 200 depois do login, `/docs` e `/openapi.json` inacessíveis, cookie com
+  `Secure`+`HttpOnly`+`SameSite=Lax`, `journal_mode=wal`.
+
+O que **não** foi validado: o build da imagem (o Docker Desktop está instalado mas o daemon
+está parado; quem constrói no deploy é o builder remoto do Fly de qualquer forma — para
+conferir antes, suba o Docker Desktop e rode `docker build -t consultor .`) e tudo que
+depende da sua conta no Fly.

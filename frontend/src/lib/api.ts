@@ -85,11 +85,55 @@ export interface PreviewExtrato {
   linhas_ignoradas?: unknown[]
 }
 
+// ── Sessão ──────────────────────────────────────────────────────────────────
+
+export interface AuthStatus {
+  auth_required: boolean
+  authenticated: boolean
+}
+
+/**
+ * Um cookie expirado só aparece quando alguma chamada volta 401 — daí este
+ * gancho, que o App usa para voltar à tela de senha de onde quer que seja.
+ */
+let aoPerderSessao: (() => void) | null = null
+
+export function definirHandlerNaoAutenticado(fn: () => void): void {
+  aoPerderSessao = fn
+}
+
+function checar401(status: number): boolean {
+  if (status !== 401) return false
+  aoPerderSessao?.()
+  return true
+}
+
+export const getAuthStatus = () => getJSON<AuthStatus>('/auth/status')
+
+export async function fazerLogin(senha: string): Promise<void> {
+  const resp = await fetch('/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ senha }),
+  })
+  if (!resp.ok) {
+    const erro = await resp.json().catch(() => null)
+    throw new Error(erro?.detail ?? `HTTP ${resp.status}`)
+  }
+}
+
+export async function fazerLogout(): Promise<void> {
+  await fetch('/logout', { method: 'POST' }).catch(() => {})
+}
+
 // ── Fetch helpers ───────────────────────────────────────────────────────────
 
 async function getJSON<T>(url: string): Promise<T> {
   const resp = await fetch(url)
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+  if (!resp.ok) {
+    checar401(resp.status)
+    throw new Error(`HTTP ${resp.status}`)
+  }
   return resp.json() as Promise<T>
 }
 
@@ -101,6 +145,7 @@ export const getSnapshots = () => getJSON<Snapshot[]>('/snapshots')
 export async function criarSnapshot(): Promise<Snapshot> {
   const resp = await fetch('/snapshots', { method: 'POST' })
   if (!resp.ok) {
+    checar401(resp.status)
     const erro = await resp.json().catch(() => null)
     throw new Error(erro?.detail ?? `HTTP ${resp.status}`)
   }
@@ -113,6 +158,7 @@ export async function enviarExtrato(arquivo: File): Promise<PreviewExtrato> {
   const resp = await fetch('/extrato/upload', { method: 'POST', body: form })
   const data = await resp.json().catch(() => null)
   if (!resp.ok) {
+    checar401(resp.status)
     throw new Error(data?.detail ?? 'Não consegui ler o extrato.')
   }
   return data as PreviewExtrato
@@ -168,6 +214,10 @@ export async function streamChat(
   }
 
   if (!resp.ok || !resp.body) {
+    if (checar401(resp.status)) {
+      h.onError('Sua sessão expirou — entre de novo.')
+      return
+    }
     h.onError(`O servidor respondeu ${resp.status}.`)
     return
   }

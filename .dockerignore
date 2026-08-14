@@ -1,0 +1,16 @@
+.venv
+frontend/node_modules
+# tsc -b pularia a emissão se achasse o projeto "já compilado" pelo cache local.
+frontend/*.tsbuildinfo
+data
+backups
+uploads
+tests
+scripts
+.git
+.github
+.pytest_cache
+__pycache__
+*.xlsx
+*.xls
+.env

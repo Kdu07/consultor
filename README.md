@@ -77,6 +77,26 @@ O banco é um único arquivo SQLite — é a carteira inteira.
 A migração de schema (`scripts/migrate_posicao_rf.py`) faz backup automático em `backups/`
 antes de alterar qualquer coisa.
 
+## Deploy (Fly.io)
+
+O plano completo é [docs/PLANO_DEPLOY_FLY.md](docs/PLANO_DEPLOY_FLY.md); o código já está
+pronto (`Dockerfile`, `fly.toml`, `app/auth.py`). O resumo:
+
+```powershell
+fly launch --no-deploy --copy-config --name consultor --region gru
+fly volumes create consultor_data --region gru --size 1
+fly secrets set ANTHROPIC_API_KEY="sk-ant-..." BRAPI_TOKEN="..." APP_PASSWORD="..." SESSION_SECRET="..."
+fly deploy --ha=false
+```
+
+**Autenticação:** com `APP_PASSWORD` preenchida, tudo exige um cookie de sessão assinado
+(30 dias) — livres apenas `/`, `/static/*`, `/health/live` e as rotas de login. Vazia, o app
+roda aberto, que é o modo local de sempre. Com `ENV=production` as duas variáveis
+(`APP_PASSWORD` e `SESSION_SECRET`) são obrigatórias: sem elas o servidor não sobe.
+
+**Antes de mandar o banco para o volume**, rode `uv run python scripts/preparar_db_para_upload.py`
+— o SQLite roda em WAL e as últimas escritas moram no `-wal` até o checkpoint.
+
 ## Estrutura
 
 | Pasta | O que tem |

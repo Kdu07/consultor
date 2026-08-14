@@ -1,10 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Sidebar from './components/Sidebar'
 import ChatView from './components/ChatView'
+import Login from './components/Login'
 import ModalImport from './components/ModalImport'
 import PainelCarteira from './components/dashboard/PainelCarteira'
 import { ProvedorToasts } from './components/Toasts'
-import { limparSessao, streamChat } from './lib/api'
+import {
+  definirHandlerNaoAutenticado,
+  getAuthStatus,
+  limparSessao,
+  streamChat,
+} from './lib/api'
 import {
   carregarConversas,
   novaConversa,
@@ -18,9 +24,36 @@ import {
 export default function App() {
   return (
     <ProvedorToasts>
-      <Aplicacao />
+      <Portao />
     </ProvedorToasts>
   )
+}
+
+/**
+ * Decide entre a tela de senha e a aplicação. Em uso local (sem APP_PASSWORD)
+ * o /auth/status já responde autenticado e isto some do caminho.
+ */
+function Portao() {
+  const [estado, setEstado] = useState<'verificando' | 'dentro' | 'fora'>(
+    'verificando',
+  )
+
+  const verificar = useCallback(() => {
+    getAuthStatus()
+      .then((s) => setEstado(s.authenticated ? 'dentro' : 'fora'))
+      // Servidor sem o endpoint (versão antiga) ou fora do ar: não adianta
+      // pedir senha — deixa a aplicação abrir e falhar com a mensagem dela.
+      .catch(() => setEstado('dentro'))
+  }, [])
+
+  useEffect(() => {
+    definirHandlerNaoAutenticado(() => setEstado('fora'))
+    verificar()
+  }, [verificar])
+
+  if (estado === 'verificando') return <div className="h-dvh bg-plane" />
+  if (estado === 'fora') return <Login onEntrou={() => setEstado('dentro')} />
+  return <Aplicacao />
 }
 
 function Aplicacao() {

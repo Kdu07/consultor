@@ -1,7 +1,8 @@
 import time
 import logging
 import httpx
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
+from fastapi.concurrency import run_in_threadpool
 from sqlmodel import Session, text
 from ..database import engine
 from ..config import get_settings
@@ -24,7 +25,7 @@ async def _check_bcb() -> dict:
         return {"ok": False, "error": str(e)}
 
 
-async def _check_yfinance() -> dict:
+def _check_yfinance_sync() -> dict:
     try:
         import yfinance as yf
         ticker = yf.Ticker("PETR4.SA")
@@ -37,6 +38,11 @@ async def _check_yfinance() -> dict:
         return {"ok": False, "error": str(e)}
 
 
+async def _check_yfinance() -> dict:
+    """yfinance é rede bloqueante — fora do event loop, senão trava o processo inteiro."""
+    return await run_in_threadpool(_check_yfinance_sync)
+
+
 def _check_db() -> dict:
     try:
         with Session(engine) as session:
@@ -46,12 +52,24 @@ def _check_db() -> dict:
         return {"ok": False, "error": str(e)}
 
 
+@router.get("/health/live")
+async def health_live():
+    """
+    Alvo do health check do Fly (a cada 30 s): só banco, zero rede externa.
+    O /health completo continua existindo para diagnóstico manual.
+    """
+    db = await run_in_threadpool(_check_db)
+    if not db["ok"]:
+        raise HTTPException(status_code=503, detail=db.get("error", "db indisponível"))
+    return {"status": "ok"}
+
+
 @router.get("/health")
 async def health():
     settings = get_settings()
     t0 = time.perf_counter()
 
-    db = _check_db()
+    db = await run_in_threadpool(_check_db)
     bcb = await _check_bcb()
     yf_check = await _check_yfinance()
 
