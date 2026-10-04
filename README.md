@@ -52,16 +52,42 @@ O extrato **XLSX** é a única fonte de verdade das posições.
    **Nada é salvo ainda.**
 4. Responda **"sim"** no chat para gravar.
 
-O que é importado: ações, ETFs, FIIs, Tesouro Direto, renda fixa privada e o saldo da conta
-corrente (classe `CAIXA`). Proventos, aluguel de ações e valores em trânsito aparecem no
-preview como informação, mas não são gravados.
+O que vira posição na carteira: ações, ETFs, FIIs, Tesouro Direto, renda fixa privada e o
+saldo da conta corrente (classe `CAIXA`).
 
 Se o total das posições não bater com o Sumário do próprio extrato, o preview avisa — vale
 conferir antes de confirmar.
 
+### Histórico dos meses importados
+
+A carteira (tabela `posicao`) guarda só o estado atual: o import sobrescreve quantidade e
+valor de cada papel. Para que o mês anterior não desapareça, cada confirmação também grava:
+
+| Onde | O que fica |
+|---|---|
+| `extratoimportado` | o extrato inteiro daquele mês — posições, proventos, movimentações, aluguel, valores em trânsito, sumário e conferência de totais |
+| `snapshotmensal` | o patrimônio na data de referência do extrato, que alimenta o gráfico do dashboard |
+
+Ambos são únicos por data de referência: reenviar o mesmo XLSX **corrige** o mês, não
+duplica. Só lotes de extrato são arquivados — gravação manual de posição avulsa não inventa
+um mês no histórico.
+
+**Extratos antigos** podem ser importados para preencher o histórico com segurança: se a
+data de referência for anterior à do último extrato já importado, o consultor arquiva o mês
+e **não toca na carteira atual** (senão a reconciliação leria a foto antiga como "a carteira
+agora" e desativaria tudo o que veio depois). O agente avisa quando isso acontece.
+
+Para consultar:
+
+```
+GET /extrato/historico                # meses importados, do mais recente ao mais antigo
+GET /extrato/historico/2026-08-31     # o extrato completo daquele mês
+```
+
 > **Privacidade:** o extrato contém nome, CPF e número da conta. `*.xlsx` está no
 > `.gitignore` e o servidor não grava o arquivo em disco. Guarde os extratos em `uploads/`
-> (também ignorado).
+> (também ignorado). O histórico arquivado guarda apenas o que o parser estruturou —
+> posições, valores e movimentações —, nunca um identificador pessoal.
 
 ## Backup e restauração
 

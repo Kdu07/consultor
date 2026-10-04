@@ -260,7 +260,14 @@ TOOL_DEFINITIONS: list[dict] = [
             "O extrato é a carteira COMPLETA na data de referência: posições que não aparecem "
             "nele saem da carteira e voltam em 'posicoes_desativadas' — sempre relate essa "
             "lista ao usuário, pode ser venda/resgate ou ativo fora do BTG. "
-            "'posicoes_reativadas' traz o caminho inverso: papel que tinha saído e voltou."
+            "'posicoes_reativadas' traz o caminho inverso: papel que tinha saído e voltou. "
+            "A gravação também arquiva o mês: 'extrato_arquivado' (extrato completo, com "
+            "proventos e movimentações) e 'snapshot' (patrimônio na data do extrato) dizem se "
+            "o mês entrou no histórico como 'criado' ou 'atualizado' — mencione de passagem, "
+            "sem transformar num relatório. "
+            "Se vier 'modo': 'somente_historico', o extrato era mais antigo que o último "
+            "importado: só o histórico foi preenchido e a carteira atual ficou intacta — "
+            "isso o usuário PRECISA saber, está no aviso."
         ),
         "input_schema": {
             "type": "object",

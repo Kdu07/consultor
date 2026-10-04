@@ -4,6 +4,7 @@ from .config_rebalanceamento import ConfigRebalanceamento
 from .perfil_risco import PerfilRisco
 from .quote_cache import QuoteCache
 from .snapshot_mensal import SnapshotMensal
+from .extrato import ExtratoImportado
 from .estrategia import EstrategiaInvestimento, PlanoFuturo, HistoricoEstrategia
 
 __all__ = [
@@ -15,6 +16,7 @@ __all__ = [
     "PerfilRisco",
     "QuoteCache",
     "SnapshotMensal",
+    "ExtratoImportado",
     "EstrategiaInvestimento",
     "PlanoFuturo",
     "HistoricoEstrategia",

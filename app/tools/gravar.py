@@ -19,6 +19,18 @@ referência, então toda posição ativa fora do lote é marcada ativo=False. Se
 a carteira nunca "encolhe": ativos vendidos, resgatados ou vindos do seed inicial
 ficam somando no dashboard para sempre. Isso vale inclusive para posições criadas à
 mão em POST /posicoes — decisão consciente: o extrato do BTG manda na carteira toda.
+
+Arquivamento (lote de extrato): o upsert acima é destrutivo — o valor do mês anterior
+é sobrescrito e nunca mais volta. Antes do commit, app/tools/extrato_arquivo.py guarda
+o extrato inteiro em ExtratoImportado e a carteira valorada em SnapshotMensal, ambos
+idempotentes por data de referência. Tudo na mesma transação: ou o mês entra completo
+(posições + histórico + snapshot) ou não entra.
+
+Extrato retroativo: com o histórico existindo, subir extratos antigos para preenchê-lo
+vira coisa natural — e seria destrutivo, porque a reconciliação leria a foto de março
+como "a carteira agora" e desativaria tudo o que foi comprado depois. Por isso, um
+extrato anterior ao mais recente já arquivado entra em modo somente-histórico: arquiva
+o mês e o snapshot daquela data, e não toca em nenhuma posição.
 """
 import logging
 from datetime import datetime, timezone
@@ -29,6 +41,12 @@ from sqlmodel import Session, select
 from ..database import engine
 from ..models.posicao import ClasseAtivo, Posicao
 from . import extrato_staging
+from .extrato_arquivo import (
+    arquivar_extrato,
+    extrato_mais_recente,
+    parse_data_referencia,
+    snapshot_do_extrato,
+)
 from .schemas import tool_error
 
 logger = logging.getLogger(__name__)
@@ -93,17 +111,21 @@ def _achar_posicao(session: Session, chave: str | None, ticker: str | None, nome
     return None
 
 
-def _resolver_lote(posicoes: list[dict] | None) -> tuple[list[dict], bool, str | None]:
+def _resolver_lote(posicoes: list[dict] | None) -> tuple[list[dict], dict | None, str | None]:
     """
-    Decide o que gravar: (lote, veio_do_extrato, aviso).
+    Decide o que gravar: (lote, estado_do_staging, aviso).
 
     Com extrato em staging, o preview é a fonte da verdade e o lote é completo —
-    a reconciliação pode rodar. Sem staging, grava-se o que o modelo passou e
-    nenhuma posição é desativada.
+    a reconciliação e o arquivamento podem rodar. Sem staging, grava-se o que o modelo
+    passou, nenhuma posição é desativada e nada é arquivado (não é um mês fechado).
+
+    O estado é lido uma única vez e devolvido inteiro: quem chama precisa do `bruto` e
+    do `arquivo` para arquivar, e reler o singleton no meio da gravação abriria janela
+    para outro upload trocar o preview no meio do caminho.
     """
     estado = extrato_staging.get()
     if not estado:
-        return (posicoes or []), False, None
+        return (posicoes or []), None, None
 
     preview = estado["preview"].get("posicoes") or []
     aviso = None
@@ -113,7 +135,7 @@ def _resolver_lote(posicoes: list[dict] | None) -> tuple[list[dict], bool, str |
             f"tem {len(preview)}. Gravei as {len(preview)} do extrato."
         )
         logger.warning("gravar_posicoes: %s", aviso)
-    return preview, True, aviso
+    return preview, estado, aviso
 
 
 async def tool_gravar_posicoes(posicoes: list[dict] | None = None) -> dict:
@@ -121,7 +143,8 @@ async def tool_gravar_posicoes(posicoes: list[dict] | None = None) -> dict:
     Grava as posições confirmadas pelo usuário no banco.
     Nunca deve ser chamada sem confirmação explícita ("sim").
     """
-    lote, veio_do_extrato, aviso_lote = _resolver_lote(posicoes)
+    lote, estado, aviso_lote = _resolver_lote(posicoes)
+    veio_do_extrato = estado is not None
     if not lote:
         return tool_error(
             "Nada a gravar: nenhum extrato em staging e nenhuma posição informada. "
@@ -136,7 +159,20 @@ async def tool_gravar_posicoes(posicoes: list[dict] | None = None) -> dict:
     ids_no_lote: set[int] = set()
 
     with Session(engine) as session:
-        for item in lote:
+        # Antes de escrever qualquer posição: este extrato é do mês corrente da carteira
+        # ou é um mês antigo sendo arquivado? Só a segunda pergunta muda o fluxo.
+        data_ref = parse_data_referencia((estado or {}).get("preview", {}).get("data_referencia"))
+        ultimo_arquivado = extrato_mais_recente(session) if veio_do_extrato else None
+        somente_historico = (
+            veio_do_extrato
+            and data_ref is not None
+            and ultimo_arquivado is not None
+            and data_ref < ultimo_arquivado
+        )
+
+        # Em modo somente-histórico o lote não é percorrido: nenhuma posição é criada,
+        # atualizada ou desativada — o extrato antigo só alimenta o arquivo lá embaixo.
+        for item in ([] if somente_historico else lote):
             try:
                 ticker = (item.get("ticker") or "").strip() or None
                 nome = (item.get("nome") or "").strip()
@@ -205,7 +241,7 @@ async def tool_gravar_posicoes(posicoes: list[dict] | None = None) -> dict:
         # Só roda em lote de extrato e só se nada falhou — um lote parcial desativaria
         # posições que na verdade existem.
         desativadas: list[dict] = []
-        if veio_do_extrato and not erros:
+        if veio_do_extrato and not erros and not somente_historico:
             ausentes = session.exec(
                 select(Posicao).where(Posicao.ativo == True)
             ).all()
@@ -222,6 +258,40 @@ async def tool_gravar_posicoes(posicoes: list[dict] | None = None) -> dict:
                     "ultimo_valor": p.valor_mercado,
                 })
 
+        # Arquivamento: guarda o mês antes que o próximo import sobrescreva estes
+        # valores. Roda nos dois modos — é justamente o que o import retroativo veio
+        # fazer. Só não roda com erro no lote: um lote parcial não é a carteira completa
+        # daquele mês e não pode virar histórico oficial nem ponto no gráfico.
+        arquivo_info: dict | None = None
+        snapshot_info: dict | None = None
+        avisos_arquivo: list[str] = []
+        if veio_do_extrato and not erros:
+            preview = estado["preview"]
+            if data_ref is None:
+                avisos_arquivo.append(
+                    "Extrato sem data de referência legível — as posições foram gravadas, "
+                    "mas o mês NÃO foi arquivado no histórico."
+                )
+            else:
+                registro, novo = arquivar_extrato(
+                    session, preview, estado.get("bruto"), estado.get("arquivo"), data_ref, now,
+                )
+                snap, snap_novo = snapshot_do_extrato(session, preview, data_ref, now)
+                session.flush()
+                arquivo_info = {
+                    "data_referencia": data_ref.isoformat(),
+                    "id": registro.id,
+                    "acao": "criado" if novo else "atualizado",
+                    "proventos_total": registro.proventos_total,
+                    "proventos_quantidade": registro.proventos_quantidade,
+                }
+                snapshot_info = {
+                    "data_referencia": data_ref.isoformat(),
+                    "id": snap.id,
+                    "acao": "criado" if snap_novo else "atualizado",
+                    "valor_total": snap.valor_total,
+                }
+
         session.commit()
 
     # O preview é de uso único: consumido, sai do staging. Assim uma gravação manual
@@ -230,8 +300,10 @@ async def tool_gravar_posicoes(posicoes: list[dict] | None = None) -> dict:
         extrato_staging.clear()
 
     logger.info(
-        "gravar_posicoes: %d criadas, %d atualizadas, %d reativadas, %d desativadas, %d erros",
+        "gravar_posicoes: %d criadas, %d atualizadas, %d reativadas, %d desativadas, "
+        "%d erros, extrato_arquivado=%s",
         criados, atualizados, len(reativadas), len(desativadas), len(erros),
+        (arquivo_info or {}).get("data_referencia"),
     )
 
     result: dict = {
@@ -243,8 +315,22 @@ async def tool_gravar_posicoes(posicoes: list[dict] | None = None) -> dict:
         "data_gravacao": now.isoformat(),
         "source": "extrato",
     }
+    if arquivo_info:
+        result["extrato_arquivado"] = arquivo_info
+    if snapshot_info:
+        result["snapshot"] = snapshot_info
+    if somente_historico:
+        result["modo"] = "somente_historico"
+        result["carteira_alterada"] = False
 
-    avisos = list(erros)
+    avisos = list(erros) + avisos_arquivo
+    if somente_historico:
+        avisos.append(
+            f"Extrato de {data_ref.isoformat()}, anterior ao último importado "
+            f"({ultimo_arquivado.isoformat()}): arquivei o mês no histórico e NÃO mexi na "
+            f"carteira atual. DIGA isso ao usuário — se ele quis mesmo voltar a carteira "
+            f"para essa data, é preciso fazer isso de propósito, não por um import."
+        )
     if aviso_lote:
         avisos.append(aviso_lote)
     if desativadas:
