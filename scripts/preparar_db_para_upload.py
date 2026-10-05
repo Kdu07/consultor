@@ -58,8 +58,13 @@ def main() -> int:
 
     print(f"\nbackup: {copia}")
     print(f"pronto para enviar: {BANCO} ({BANCO.stat().st_size / 1024:.0f} KB)")
-    print("\nNo Fly:\n  fly machine stop <ID>\n  fly ssh sftp shell")
-    print("    put data/carteira.db /data/carteira.db\n    quit\n  fly machine start <ID>")
+    # Máquina RODANDO: o ssh/sftp não fala com máquina parada. Sobe com nome temporário
+    # e troca levando junto o -wal e o -shm do banco antigo (PLANO_DEPLOY_FLY, passo 7).
+    print("\nNo Fly (com a máquina rodando):")
+    print("  fly ssh sftp put data/carteira.db /data/carteira.novo.db")
+    print("  fly ssh console -C \"sh -c 'rm -f /data/carteira.db /data/carteira.db-wal "
+          "/data/carteira.db-shm && mv /data/carteira.novo.db /data/carteira.db'\"")
+    print("  fly machine restart <ID>")
     return 0
 
 

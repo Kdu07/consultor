@@ -105,15 +105,17 @@ antes de alterar qualquer coisa.
 
 ## Deploy (Fly.io)
 
-O plano completo é [docs/PLANO_DEPLOY_FLY.md](docs/PLANO_DEPLOY_FLY.md); o código já está
-pronto (`Dockerfile`, `fly.toml`, `app/auth.py`). O resumo:
+No ar em <https://consultor.fly.dev> — app `consultor`, org `kdu07`, região `gru`. O plano e
+o registro do que foi feito estão em [docs/PLANO_DEPLOY_FLY.md](docs/PLANO_DEPLOY_FLY.md)
+(§9). No dia a dia:
 
 ```powershell
-fly launch --no-deploy --copy-config --name consultor --region gru
-fly volumes create consultor_data --region gru --size 1
-fly secrets set ANTHROPIC_API_KEY="sk-ant-..." BRAPI_TOKEN="..." APP_PASSWORD="..." SESSION_SECRET="..."
-fly deploy --ha=false
+fly deploy        # publica a versão local (builder remoto; não precisa de Docker local)
+fly status        # deve haver sempre UMA máquina — SQLite + um volume não aceitam duas
+fly logs          # logs ao vivo
 ```
+
+**Backup do banco de produção:** passo 8 do plano (checkpoint + `fly ssh sftp get`).
 
 **Autenticação:** com `APP_PASSWORD` preenchida, tudo exige um cookie de sessão assinado
 (30 dias) — livres apenas `/`, `/static/*`, `/health/live` e as rotas de login. Vazia, o app

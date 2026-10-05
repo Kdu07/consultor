@@ -1,8 +1,12 @@
 # Plano de deploy no Fly.io — Consultor Financeiro Pessoal
 
-Rev. 3 — 13/08/2026
+Rev. 4 — 05/10/2026
 Alternativa a `PLANO_DEPLOY_VERCEL.md` — este é o caminho recomendado.
 
+> **O que mudou da rev. 3:** o deploy foi **executado** — está no ar em
+> <https://consultor.fly.dev>; ver §9. Os passos 7 e 8 trocaram os comandos interativos
+> (e as aspas aninhadas que o PowerShell 5.1 estraga) por comandos testados.
+>
 > **O que mudou da rev. 2:** os Blocos A, B e C foram **implementados** — ver §8,
 > "Estado da execução". O plano em si continua válido; as diferenças entre o que
 > estava escrito e o que ficou no código estão listadas lá. O que falta é só a
@@ -366,10 +370,7 @@ uv run python scripts/preparar_db_para_upload.py
 
 # 2. Enviar para um nome temporário (a máquina PRECISA estar rodando)
 fly machine list
-fly ssh sftp shell
-# no prompt do sftp:
-#   put data/carteira.db /data/carteira.novo.db
-#   quit
+fly ssh sftp put data/carteira.db /data/carteira.novo.db
 
 # 3. Trocar no lugar, levando junto o -wal e o -shm do banco vazio
 fly ssh console -C "sh -c 'rm -f /data/carteira.db /data/carteira.db-wal /data/carteira.db-shm && mv /data/carteira.novo.db /data/carteira.db'"
@@ -411,8 +412,10 @@ como único backup.
 ```powershell
 # Checkpoint antes de baixar — no servidor o banco também roda em WAL, e um
 # `get` cru do .db deixaria as últimas escritas para trás.
-fly ssh console -C "python -c \"import sqlite3; c=sqlite3.connect('/data/carteira.db'); c.execute('PRAGMA wal_checkpoint(TRUNCATE)'); c.close()\""
-fly ssh sftp get /data/carteira.db "backups\carteira-$(Get-Date -f yyyyMMdd).db"
+# `python -m sqlite3` (Python 3.12+) dispensa aspas duplas aninhadas, que o
+# PowerShell 5.1 não repassa direito para executáveis nativos.
+fly ssh console -C "python -m sqlite3 /data/carteira.db 'PRAGMA wal_checkpoint(TRUNCATE)'"
+fly ssh sftp get /data/carteira.db "backups\carteira-fly-$(Get-Date -f yyyyMMdd).db"
 ```
 
 Rode semanalmente — ou agende com o Task Scheduler do Windows. Configure também a
@@ -568,3 +571,70 @@ continua em aberto, como previsto.
 O que só pode ser feito com a sua conta: `fly auth login` (navegador + cartão) e tudo o que
 vem depois — §4, passos 1 a 10. O `flyctl` v0.4.83 já está instalado em
 `%USERPROFILE%\.fly\bin\flyctl.exe`.
+
+---
+
+## 9. Deploy executado (rev. 4 — 05/10/2026)
+
+No ar em **<https://consultor.fly.dev>**.
+
+| Item | Valor |
+|---|---|
+| App | `consultor`, na org **`kdu07`** |
+| Máquina | `82d1e40c7740e8` — `shared-cpu-1x` 512 MB, `gru`, autosuspend |
+| Volume | `consultor_data` (`vol_4y8p3g276djy2dpr`), 1 GB, criptografado, snapshots diários com retenção de 5 dias |
+| Imagem | 180 MB comprimida no registry (908 MB descomprimida, ver §8) |
+| Secrets | `ANTHROPIC_API_KEY`, `SESSION_SECRET`, `APP_PASSWORD` — sem `BRAPI_TOKEN` |
+
+### Onde a execução diferiu do §4
+
+1. **Org `kdu07`, não a pessoal.** A org pessoal está com o trial encerrado e sem cartão; a
+   `kdu07` (mesmo dono, único membro) já tinha cartão e cobrança em dia. A cobrança do app
+   vai para ela.
+2. **`fly apps create` no lugar de `fly launch`.** `fly apps create consultor --org kdu07` é
+   não interativo e não tenta reescrever o `fly.toml`. Volume criado com `--yes`.
+3. **`fly auth login` exige terminal interativo** — sem TTY falha com "requires an
+   interactive terminal". Nessa primeira execução o flyctl se autoatualizou (v0.4.83 →
+   v0.4.111).
+4. **Secrets por `fly secrets import --stage`**, lendo `NOME=valor` do stdin: o valor nunca
+   aparece em linha de comando e o `--stage` evita restart antes do primeiro deploy.
+   Armadilha do Windows PowerShell 5.1: o stdin dos processos filhos pode sair com BOM
+   (quando o `[Console]::InputEncoding` do host é UTF-8 com preâmbulo) e o Fly rejeita o
+   nome — `"﻿ANTHROPIC_API_KEY" is not a valid secret name`. Antes do pipe:
+   ```powershell
+   $semBom = New-Object System.Text.UTF8Encoding $false
+   [Console]::InputEncoding = $semBom
+   $OutputEncoding = $semBom      # sem isto, acentos viram '?'
+   ```
+5. **`fly ssh sftp put` existe** e substituiu o `sftp shell` interativo do passo 7.
+
+### Validação feita
+
+- **Público, sem cookie:** `/health/live` 200; `/` e assets do Vite 200; `/dashboard`,
+  `/posicoes`, `/extrato/historico`, `/health`, `/docs` e `/openapi.json` → **401**;
+  `/auth/status` → `auth_required: true`; HTTP → HTTPS com 301.
+- **Banco:** `/data/carteira.db` depois do restart idêntico ao local (15 posições ativas,
+  3 snapshots, `integrity_check: ok`); `extratoimportado` criada no boot pelo `create_all`.
+- **Cotações:** sem `BRAPI_TOKEN`, `PRICE_PROVIDER=brapi` cai para yfinance
+  (`app/providers/composite.py:46`), e o Yahoo responde do IP de São Paulo (PETR4, ITUB4,
+  BOVA11 e MXRF11 em menos de 5 s). O log de boot diz `provider: brapi` porque mostra a
+  config, não o provider efetivo.
+- **Anthropic:** chave válida e `claude-sonnet-4-6` disponível (`models.retrieve`).
+- **Memória:** uvicorn com ~113 MB de RSS antes de carregar o `pandas`; 512 MB com folga.
+- **G7 mudou:** o endpoint do Tesouro Direto agora responde **404** (não mais 403), com
+  qualquer User-Agent e a partir de IP brasileiro — a URL deixou de existir. Os títulos
+  continuam caindo para o saldo do extrato.
+- **Backup do passo 8** testado com os comandos corrigidos: cópia íntegra em `backups\`.
+
+### Operação
+
+```powershell
+fly deploy                    # redeploy; a contagem de máquinas já está fixada em 1
+fly status                    # deve haver sempre UMA máquina
+fly logs                      # logs ao vivo
+fly secrets set NOME=valor    # reinicia a máquina e zera o histórico do chat em RAM
+```
+
+Em aberto, por decisão do dono: token da brapi, backup agendado, alerta de gasto e
+retenção de snapshots de 30 dias no dashboard do Fly, domínio próprio e imagem enxuta
+(Bloco D).
