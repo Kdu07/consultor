@@ -1,5 +1,6 @@
 import {
   ChartCandlestick,
+  ChartLine,
   FileText,
   HeartPulse,
   MessageSquarePlus,
@@ -11,24 +12,29 @@ import { agruparPorPeriodo, type Conversa } from '../lib/conversas'
 
 interface Props {
   conversas: Conversa[]
+  /** Conversa em destaque; vazio quando a tela atual não é o chat. */
   ativaId: string
+  historicoAtivo: boolean
   onSelecionar(id: string): void
   onNova(): void
   onExcluir(id: string): void
   onFechar(): void
   onImportar(): void
   onAbrirCarteira(): void
+  onAbrirHistorico(): void
 }
 
 export default function Sidebar({
   conversas,
   ativaId,
+  historicoAtivo,
   onSelecionar,
   onNova,
   onExcluir,
   onFechar,
   onImportar,
   onAbrirCarteira,
+  onAbrirHistorico,
 }: Props) {
   const grupos = agruparPorPeriodo(conversas)
 
@@ -104,6 +110,12 @@ export default function Sidebar({
 
       <div className="hairline-t p-2">
         <ItemRodape
+          icone={<ChartLine size={15} />}
+          rotulo="Histórico"
+          onClick={onAbrirHistorico}
+          ativo={historicoAtivo}
+        />
+        <ItemRodape
           icone={<ChartCandlestick size={15} />}
           rotulo="Carteira"
           onClick={onAbrirCarteira}
@@ -140,15 +152,20 @@ function ItemRodape({
   icone,
   rotulo,
   onClick,
+  ativo = false,
 }: {
   icone: React.ReactNode
   rotulo: string
   onClick(): void
+  ativo?: boolean
 }) {
   return (
     <button
       onClick={onClick}
-      className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] text-ink-2 transition-colors hover:bg-surface-2 hover:text-ink"
+      aria-current={ativo ? 'page' : undefined}
+      className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] transition-colors ${
+        ativo ? 'bg-surface-2 text-ink' : 'text-ink-2 hover:bg-surface-2 hover:text-ink'
+      }`}
     >
       <span className="text-ink-3">{icone}</span>
       {rotulo}

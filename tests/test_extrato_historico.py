@@ -5,18 +5,18 @@ O que estes testes protegem: antes desta camada, `gravar_posicoes` fazia upsert
 destrutivo na tabela Posicao e o preview — proventos, movimentações, aluguel, valores
 em trânsito — morria em memória junto com o staging. Importar setembro apagava agosto.
 
-Cobrem as três garantias da camada: o mês é arquivado inteiro, reimportar corrige em
-vez de duplicar, e o snapshot sai com a data e o valor do extrato (não os de hoje).
+Cobrem as garantias da camada: o mês é arquivado inteiro, reimportar corrige em vez de
+duplicar, e o SnapshotMensal — aposentado em 10/2026 (docs/PLANO_HISTORICO.md) — não é mais
+gravado: a série sai do próprio extrato arquivado.
 """
 import json
 import logging
-from pathlib import Path
 
 import pytest
 
-logger = logging.getLogger(__name__)
+from tests.planilhas import bytes_fixture
 
-FIXTURE = Path(__file__).parent / "fixtures" / "extrato_exemplo.xlsx"
+logger = logging.getLogger(__name__)
 
 
 @pytest.fixture
@@ -36,9 +36,7 @@ def banco_temporario(tmp_path, monkeypatch):
     SQLModel.metadata.create_all(engine)
 
     import app.tools.gravar as gravar_mod
-    import app.api.extrato as extrato_api
     monkeypatch.setattr(gravar_mod, "engine", engine)
-    monkeypatch.setattr(extrato_api, "engine", engine)
 
     yield engine
     get_settings.cache_clear()
@@ -57,7 +55,7 @@ def staging_limpo():
 def extrato_parseado():
     from app.tools.btg_xlsx_parser import parse_btg_xlsx
 
-    return parse_btg_xlsx(FIXTURE.read_bytes())
+    return parse_btg_xlsx(bytes_fixture())
 
 
 @pytest.fixture
@@ -138,40 +136,29 @@ async def test_reimportar_o_mesmo_mes_corrige_em_vez_de_duplicar(banco_temporari
 
     assert primeiro["extrato_arquivado"]["acao"] == "criado"
     assert segundo["extrato_arquivado"]["acao"] == "atualizado"
-    assert segundo["snapshot"]["acao"] == "atualizado"
 
     with Session(banco_temporario) as s:
         registros = s.exec(select(ExtratoImportado)).all()
         assert len(registros) == 1
         assert registros[0].arquivo == "reenvio.xlsx", "o reenvio corrige a linha existente"
-        assert len(s.exec(select(SnapshotMensal)).all()) == 1
+        assert s.exec(select(SnapshotMensal)).all() == []
 
 
-async def test_snapshot_usa_a_data_e_o_valor_do_extrato(banco_temporario, staging_completo):
+async def test_import_nao_grava_mais_snapshot(banco_temporario, staging_completo):
     """
-    Buscar preço de hoje para um extrato de meses atrás produziria um total que nunca
-    existiu. O número oficial daquela data é o do próprio extrato.
+    O SnapshotMensal foi aposentado: a série de patrimônio sai do extrato arquivado (Total
+    Bruto do Sumário). Gravar um snapshot por import só duplicaria o dado.
     """
-    from datetime import date
     from sqlmodel import Session, select
     from app.models.snapshot_mensal import SnapshotMensal
     from app.tools.gravar import tool_gravar_posicoes
 
     resultado = await tool_gravar_posicoes()
-    ref = date.fromisoformat(staging_completo["data_referencia"])
 
-    assert resultado["snapshot"]["acao"] == "criado"
-
+    assert "snapshot" not in resultado
+    assert resultado["extrato_arquivado"]["acao"] == "criado"
     with Session(banco_temporario) as s:
-        snap = s.exec(select(SnapshotMensal)).one()
-
-    assert snap.data_referencia == ref, "a data e a do extrato, nao date.today()"
-    assert snap.valor_total == pytest.approx(staging_completo["total_valor_mercado"], abs=0.01)
-
-    payload = json.loads(snap.payload_json)
-    assert payload["origem"] == "extrato_btg_xlsx"
-    assert len(payload["posicoes"]) == staging_completo["total_posicoes"]
-    assert all(p["source"] == "extrato" for p in payload["posicoes"])
+        assert s.exec(select(SnapshotMensal)).all() == []
 
 
 async def test_gravacao_manual_nao_arquiva(banco_temporario):
@@ -200,11 +187,14 @@ async def test_gravacao_manual_nao_arquiva(banco_temporario):
 
 async def test_lote_com_erro_nao_arquiva(banco_temporario, staging_completo):
     """
-    Espelha a reconciliação: um lote que falhou não é a carteira completa daquele mês,
-    então não pode virar histórico oficial.
+    Atomicidade (plano "Confiabilidade"): um lote que falhou não é a carteira completa
+    daquele mês — a gravação é tudo-ou-nada, então nada vira posição NEM histórico.
+    (Antes havia commit parcial: as posições válidas entravam e só o arquivamento era
+    pulado.)
     """
     from sqlmodel import Session, select
     from app.models.extrato import ExtratoImportado
+    from app.models.posicao import Posicao
     from app.tools import extrato_staging
     from app.tools.gravar import tool_gravar_posicoes
 
@@ -214,11 +204,13 @@ async def test_lote_com_erro_nao_arquiva(banco_temporario, staging_completo):
 
     resultado = await tool_gravar_posicoes()
 
+    assert "error" in resultado, resultado
+    assert "sem nome" in resultado["error"]
     assert "extrato_arquivado" not in resultado
-    assert any("sem nome" in a for a in resultado["avisos"])
 
     with Session(banco_temporario) as s:
         assert s.exec(select(ExtratoImportado)).all() == []
+        assert s.exec(select(Posicao)).all() == [], "rollback total: nada parcial no banco"
 
 
 async def test_extrato_retroativo_nao_destroi_a_carteira(banco_temporario, extrato_parseado):
@@ -286,8 +278,7 @@ def test_upload_deixa_o_bruto_no_staging():
     app.include_router(router)
     client = TestClient(app)
 
-    with FIXTURE.open("rb") as fh:
-        resp = client.post("/extrato/upload", files={"arquivo": ("extrato_exemplo.xlsx", fh)})
+    resp = client.post("/extrato/upload", files={"arquivo": ("extrato_exemplo.xlsx", bytes_fixture())})
     assert resp.status_code == 200, resp.text
 
     bruto = extrato_staging.get()["bruto"]

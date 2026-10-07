@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import type { ClasseAlocacao } from '../../lib/api'
 import { corDaClasse, ordemDaClasse, rotuloDaClasse } from '../../lib/classes'
 import { fmtBRL, fmtPct } from '../../lib/format'
 
@@ -12,7 +11,7 @@ export default function BarraAlocacao({
   classes,
   total,
 }: {
-  classes: ClasseAlocacao[]
+  classes: { classe: string; valor: number }[]
   total: number
 }) {
   const [ativo, setAtivo] = useState<string | null>(null)

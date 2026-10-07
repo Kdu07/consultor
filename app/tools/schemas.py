@@ -106,6 +106,50 @@ TOOL_DEFINITIONS: list[dict] = [
         },
     },
     {
+        "name": "desempenho_carteira",
+        "description": (
+            "Rentabilidade REAL da carteira — descontados aportes e resgates do razão da conta "
+            "corrente, mês a mês (Modified Dietz) e encadeada no período —, comparada ao CDI e "
+            "ao IPCA dos MESMOS meses, mais a renda passiva (proventos). Fonte: os extratos "
+            "BTG arquivados; benchmarks do BCB. Use para qualquer pergunta de 'quanto rendi', "
+            "'ganhei do CDI?', 'retorno real', 'como foi o ano'. NUNCA responda rentabilidade "
+            "com variação de saldo (ela inclui aportes). "
+            "Ao citar o número, diga o período e, se 'status' não for 'ok', diga por quê "
+            "(estão em 'avisos'): 'parcial' = faltam meses na janela; 'provisorio' = há "
+            "lançamentos da conta que o usuário ainda não classificou. "
+            "'mensal' traz a série no formato de 'mensal_colunas'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "periodo": {
+                    "type": "string",
+                    "enum": ["mes", "ano", "12m", "inicio"],
+                    "description": (
+                        "Janela: 'mes' (último fechamento, ou o informado em 'mes'), 'ano' "
+                        "(do início do ano até o último fechamento), '12m', 'inicio' (desde o "
+                        "primeiro mês calculável). Padrão: '12m'."
+                    ),
+                },
+                "nivel": {
+                    "type": "string",
+                    "enum": ["carteira", "classe", "ativo"],
+                    "description": (
+                        "Nível de detalhe. 'carteira' (padrão): só o total. 'classe': mais o "
+                        "resultado por classe. 'ativo': mais os 10 papéis de maior resultado "
+                        "(em R$, para cima ou para baixo) — use para 'o que mais rendeu', 'o que "
+                        "puxou a carteira para baixo', 'quanto ganhei com BBAS3'."
+                    ),
+                },
+                "mes": {
+                    "type": "string",
+                    "description": "AAAA-MM — só com periodo='mes', para um mês específico.",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "importar_extrato",
         "description": (
             "Lê o extrato XLSX da conta de investimento do BTG que o usuário enviou pela "
@@ -262,12 +306,12 @@ TOOL_DEFINITIONS: list[dict] = [
             "lista ao usuário, pode ser venda/resgate ou ativo fora do BTG. "
             "'posicoes_reativadas' traz o caminho inverso: papel que tinha saído e voltou. "
             "A gravação também arquiva o mês: 'extrato_arquivado' (extrato completo, com "
-            "proventos e movimentações) e 'snapshot' (patrimônio na data do extrato) dizem se "
-            "o mês entrou no histórico como 'criado' ou 'atualizado' — mencione de passagem, "
-            "sem transformar num relatório. "
-            "Se vier 'modo': 'somente_historico', o extrato era mais antigo que o último "
-            "importado: só o histórico foi preenchido e a carteira atual ficou intacta — "
-            "isso o usuário PRECISA saber, está no aviso."
+            "proventos, movimentações e o razão da conta) diz se o mês entrou no histórico "
+            "como 'criado' ou 'atualizado' — mencione de passagem, sem transformar num "
+            "relatório. "
+            "Se vier 'modo': 'somente_historico', o extrato era mais antigo que a data que a "
+            "carteira já reflete: só o histórico foi preenchido e a carteira atual ficou "
+            "intacta — isso o usuário PRECISA saber, está no aviso."
         ),
         "input_schema": {
             "type": "object",

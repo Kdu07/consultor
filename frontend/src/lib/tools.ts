@@ -10,6 +10,7 @@ const ROTULOS: Record<string, string> = {
   sugerir_rebalanceamento: 'analisando rebalanceamento',
   atualizar_estrategia: 'atualizando a estratégia',
   proposta_rebalanceamento: 'montando a proposta',
+  desempenho_carteira: 'calculando o desempenho',
 }
 
 export function rotuloTool(nome: string): string {

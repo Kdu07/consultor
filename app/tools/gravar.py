@@ -5,6 +5,16 @@ Guardrail 4 (PLANO §3): esta tool SÓ deve ser chamada no turno de confirmaçã
 após o usuário dizer "sim" explicitamente. A arquitetura garante isso: a gravação
 existe apenas aqui, não em importar_extrato.
 
+Validação por gravidade (plano "Confiabilidade dos extratos"): o staging guarda o payload
+de anexar_validacao em estado["bruto"]["validacao"]. Veredito "erro" (divergência acima de
+R$ 1,00 entre o que o parser leu e o que o próprio extrato declara) BLOQUEIA a gravação —
+nada é escrito e o staging fica como está, para o usuário poder perguntar o que falhou.
+Veredito "aviso" grava e repassa as mensagens em result["avisos"]. Staging sem bruto ou
+sem validacao (gravação manual, testes, staging antigo) grava como sempre.
+
+Atomicidade: qualquer erro por item invalida o lote INTEIRO — session.rollback() e
+tool_error, nada parcial no banco. Vale para o lote do extrato e para a gravação manual.
+
 Fonte da verdade: o preview em extrato_staging, não a lista que o modelo reescreve.
 O modelo repetir 15 posições no argumento da tool é um caminho de perda de dados
 (truncar a lista, arredondar valores) — e, com reconciliação, uma lista truncada
@@ -22,15 +32,16 @@ mão em POST /posicoes — decisão consciente: o extrato do BTG manda na cartei
 
 Arquivamento (lote de extrato): o upsert acima é destrutivo — o valor do mês anterior
 é sobrescrito e nunca mais volta. Antes do commit, app/tools/extrato_arquivo.py guarda
-o extrato inteiro em ExtratoImportado e a carteira valorada em SnapshotMensal, ambos
-idempotentes por data de referência. Tudo na mesma transação: ou o mês entra completo
-(posições + histórico + snapshot) ou não entra.
+o extrato inteiro em ExtratoImportado, idempotente por data de referência. Tudo na mesma
+transação: ou o mês entra completo (posições + histórico) ou não entra.
 
 Extrato retroativo: com o histórico existindo, subir extratos antigos para preenchê-lo
 vira coisa natural — e seria destrutivo, porque a reconciliação leria a foto de março
 como "a carteira agora" e desativaria tudo o que foi comprado depois. Por isso, um
-extrato anterior ao mais recente já arquivado entra em modo somente-histórico: arquiva
-o mês e o snapshot daquela data, e não toca em nenhuma posição.
+extrato anterior à data de corte entra em modo somente-histórico: arquiva o mês e não
+toca em nenhuma posição. O corte é o mais novo entre o
+extrato arquivado mais recente e a data que a carteira reflete (ReferenciaCarteira — ver
+extrato_arquivo.data_de_corte); o import no modo normal atualiza essa data.
 """
 import logging
 from datetime import datetime, timezone
@@ -43,9 +54,9 @@ from ..models.posicao import ClasseAtivo, Posicao
 from . import extrato_staging
 from .extrato_arquivo import (
     arquivar_extrato,
-    extrato_mais_recente,
+    data_de_corte,
     parse_data_referencia,
-    snapshot_do_extrato,
+    registrar_referencia,
 )
 from .schemas import tool_error
 
@@ -151,6 +162,29 @@ async def tool_gravar_posicoes(posicoes: list[dict] | None = None) -> dict:
             "Peça ao usuário para enviar o XLSX pelo botão 'Importar extrato BTG'."
         )
 
+    # Veredito do validador de invariantes — ver docstring do módulo. A ausência de
+    # bruto/validacao é tolerada de propósito (staging antigo, testes, gravação manual).
+    validacao = ((estado or {}).get("bruto") or {}).get("validacao") or {}
+    if validacao.get("veredito") == "erro":
+        reprovados = validacao.get("erros") or [
+            f"{c.get('id')} — {c.get('rotulo')}: esperado {c.get('esperado')}, "
+            f"obtido {c.get('obtido')} (diferença {c.get('diferenca')})"
+            for c in validacao.get("checks") or []
+            if (c or {}).get("severidade") == "erro"
+        ] or ["o validador reprovou o extrato sem detalhar os checks"]
+        logger.warning(
+            "gravar_posicoes: extrato reprovado na validação (%d erro(s)) — nada gravado",
+            len(reprovados),
+        )
+        return tool_error(
+            f"O extrato REPROVOU na validação de invariantes ({len(reprovados)} "
+            "conferência(s) com divergência acima de R$ 1,00):\n- "
+            + "\n- ".join(reprovados)
+            + "\nNada foi gravado. Confira o arquivo no app BTG e reenvie; se o BTG "
+            "estiver mesmo divergente, fale com o dono do sistema."
+        )
+    avisos_validacao = list(validacao.get("avisos") or [])
+
     now = datetime.now(timezone.utc)
     criados = 0
     atualizados = 0
@@ -162,12 +196,12 @@ async def tool_gravar_posicoes(posicoes: list[dict] | None = None) -> dict:
         # Antes de escrever qualquer posição: este extrato é do mês corrente da carteira
         # ou é um mês antigo sendo arquivado? Só a segunda pergunta muda o fluxo.
         data_ref = parse_data_referencia((estado or {}).get("preview", {}).get("data_referencia"))
-        ultimo_arquivado = extrato_mais_recente(session) if veio_do_extrato else None
+        corte = data_de_corte(session) if veio_do_extrato else None
         somente_historico = (
             veio_do_extrato
             and data_ref is not None
-            and ultimo_arquivado is not None
-            and data_ref < ultimo_arquivado
+            and corte is not None
+            and data_ref < corte
         )
 
         # Em modo somente-histórico o lote não é percorrido: nenhuma posição é criada,
@@ -237,11 +271,26 @@ async def tool_gravar_posicoes(posicoes: list[dict] | None = None) -> dict:
             except Exception as e:
                 erros.append(f"Erro ao processar '{item.get('ticker', item.get('nome', '?'))}': {e}")
 
+        # Atomicidade: erro em QUALQUER item invalida o lote inteiro. Antes havia commit
+        # incondicional mesmo com erros — estado parcial no banco (e a reconciliação
+        # pulada deixava a carteira inconsistente em silêncio). Agora: rollback e
+        # tool_error; o staging (se houver) fica para o usuário perguntar o que falhou.
+        if erros:
+            session.rollback()
+            logger.warning(
+                "gravar_posicoes: %d erro(s) no lote — rollback, nada foi gravado", len(erros)
+            )
+            return tool_error(
+                "NENHUMA posição foi gravada — a gravação é tudo-ou-nada e houve erro "
+                "no lote:\n- " + "\n- ".join(erros)
+                + ("\nO extrato continua em staging: corrija o problema e confirme de novo."
+                   if veio_do_extrato else "")
+            )
+
         # Reconciliação: o extrato é a carteira completa naquela data de referência.
-        # Só roda em lote de extrato e só se nada falhou — um lote parcial desativaria
-        # posições que na verdade existem.
+        # Só roda em lote de extrato (erro no lote já retornou acima).
         desativadas: list[dict] = []
-        if veio_do_extrato and not erros and not somente_historico:
+        if veio_do_extrato and not somente_historico:
             ausentes = session.exec(
                 select(Posicao).where(Posicao.ativo == True)
             ).all()
@@ -260,12 +309,10 @@ async def tool_gravar_posicoes(posicoes: list[dict] | None = None) -> dict:
 
         # Arquivamento: guarda o mês antes que o próximo import sobrescreva estes
         # valores. Roda nos dois modos — é justamente o que o import retroativo veio
-        # fazer. Só não roda com erro no lote: um lote parcial não é a carteira completa
-        # daquele mês e não pode virar histórico oficial nem ponto no gráfico.
+        # fazer. (Lote com erro não chega aqui: o rollback acima já devolveu tool_error.)
         arquivo_info: dict | None = None
-        snapshot_info: dict | None = None
         avisos_arquivo: list[str] = []
-        if veio_do_extrato and not erros:
+        if veio_do_extrato:
             preview = estado["preview"]
             if data_ref is None:
                 avisos_arquivo.append(
@@ -276,7 +323,6 @@ async def tool_gravar_posicoes(posicoes: list[dict] | None = None) -> dict:
                 registro, novo = arquivar_extrato(
                     session, preview, estado.get("bruto"), estado.get("arquivo"), data_ref, now,
                 )
-                snap, snap_novo = snapshot_do_extrato(session, preview, data_ref, now)
                 session.flush()
                 arquivo_info = {
                     "data_referencia": data_ref.isoformat(),
@@ -285,24 +331,22 @@ async def tool_gravar_posicoes(posicoes: list[dict] | None = None) -> dict:
                     "proventos_total": registro.proventos_total,
                     "proventos_quantidade": registro.proventos_quantidade,
                 }
-                snapshot_info = {
-                    "data_referencia": data_ref.isoformat(),
-                    "id": snap.id,
-                    "acao": "criado" if snap_novo else "atualizado",
-                    "valor_total": snap.valor_total,
-                }
+                if not somente_historico:
+                    # A carteira passou a refletir este extrato: é o novo corte.
+                    registrar_referencia(session, data_ref, now=now)
 
         session.commit()
 
     # O preview é de uso único: consumido, sai do staging. Assim uma gravação manual
     # posterior ("adicione tal posição") não é confundida com o lote do extrato.
-    if veio_do_extrato and not erros:
+    # (Só se chega aqui em sucesso — erro no lote retornou antes do commit, com staging.)
+    if veio_do_extrato:
         extrato_staging.clear()
 
     logger.info(
         "gravar_posicoes: %d criadas, %d atualizadas, %d reativadas, %d desativadas, "
-        "%d erros, extrato_arquivado=%s",
-        criados, atualizados, len(reativadas), len(desativadas), len(erros),
+        "extrato_arquivado=%s",
+        criados, atualizados, len(reativadas), len(desativadas),
         (arquivo_info or {}).get("data_referencia"),
     )
 
@@ -317,17 +361,16 @@ async def tool_gravar_posicoes(posicoes: list[dict] | None = None) -> dict:
     }
     if arquivo_info:
         result["extrato_arquivado"] = arquivo_info
-    if snapshot_info:
-        result["snapshot"] = snapshot_info
     if somente_historico:
         result["modo"] = "somente_historico"
         result["carteira_alterada"] = False
 
-    avisos = list(erros) + avisos_arquivo
+    # Avisos da validação primeiro (o modelo os repete ao usuário), depois os do fluxo.
+    avisos = avisos_validacao + avisos_arquivo
     if somente_historico:
         avisos.append(
-            f"Extrato de {data_ref.isoformat()}, anterior ao último importado "
-            f"({ultimo_arquivado.isoformat()}): arquivei o mês no histórico e NÃO mexi na "
+            f"Extrato de {data_ref.isoformat()}, anterior à data que a carteira já reflete "
+            f"({corte.isoformat()}): arquivei o mês no histórico e NÃO mexi na "
             f"carteira atual. DIGA isso ao usuário — se ele quis mesmo voltar a carteira "
             f"para essa data, é preciso fazer isso de propósito, não por um import."
         )
@@ -344,11 +387,6 @@ async def tool_gravar_posicoes(posicoes: list[dict] | None = None) -> dict:
         avisos.append(
             f"Voltaram à carteira depois de terem saído em algum extrato anterior: "
             f"{', '.join(reativadas)}."
-        )
-    if erros and veio_do_extrato:
-        avisos.append(
-            "Não desativei nenhuma posição porque houve erro no lote — a carteira pode "
-            "ter ativos que já não existem no extrato."
         )
     if avisos:
         result["avisos"] = avisos

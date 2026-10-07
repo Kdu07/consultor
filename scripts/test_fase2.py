@@ -38,9 +38,12 @@ def show(label: str, data: dict) -> None:
 # o agente então chama importar_extrato() sem argumentos.
 import httpx  # noqa: E402
 
-XLSX = Path(sys.argv[1] if len(sys.argv) > 1 else "uploads/001234567.xlsx")
-if not XLSX.exists():
-    sys.exit(f"Extrato nao encontrado: {XLSX}. Passe o caminho do XLSX como argumento.")
+# Sem argumento, usa o primeiro XLSX de uploads/ (pasta fora do git). O nome do arquivo
+# baixado do BTG é o número da conta — por isso não fica escrito aqui.
+_candidatos = sorted(Path("uploads").glob("*.xlsx"))
+XLSX = Path(sys.argv[1]) if len(sys.argv) > 1 else (_candidatos[0] if _candidatos else None)
+if XLSX is None or not XLSX.exists():
+    sys.exit("Extrato nao encontrado. Passe o caminho do XLSX como argumento ou coloque-o em uploads/.")
 
 print(f"\n>>> Enviando {XLSX.name} para POST /extrato/upload...")
 with XLSX.open("rb") as fh:

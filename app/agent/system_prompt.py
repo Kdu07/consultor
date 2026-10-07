@@ -5,6 +5,7 @@ Lê a parte fixa de docs/system_prompt_consultor_otimizado.md (acima do marcador
 === CONTEXTO DINÂMICO ===) e injeta o contexto dinâmico montado a partir do banco.
 """
 import logging
+import re
 from pathlib import Path
 
 from sqlmodel import Session, select
@@ -19,19 +20,28 @@ logger = logging.getLogger(__name__)
 
 _SP_PATH = Path(__file__).parent.parent.parent / "docs" / "system_prompt_consultor_otimizado.md"
 _MARKER = "=== CONTEXTO DINÂMICO ==="
+# O marcador só conta sozinho na linha — ver _fixed_part.
+_RE_MARKER = re.compile(rf"^{re.escape(_MARKER)}[ \t]*$", re.MULTILINE)
+
 
 # Cache em memória — reconstruído a cada chamada (sessão nova pode ter perfil atualizado)
 # Para esta escala (single-user) reconstruir é trivial.
 
 
 def _fixed_part() -> str:
-    """Retorna a parte fixa do system prompt (tudo antes do marcador)."""
+    """
+    Retorna a parte fixa do system prompt (tudo antes do marcador).
+
+    O marcador conta só sozinho na linha: o próprio .md o cita na nota "Como usar" da
+    linha 3. Um `find` simples parava ali — de 06/2026 a 10/2026 o modelo recebeu só 101
+    caracteres de parte fixa, sem persona, guardrails nem princípios das tools.
+    """
     text = _SP_PATH.read_text(encoding="utf-8")
-    idx = text.find(_MARKER)
-    if idx == -1:
+    achado = _RE_MARKER.search(text)
+    if achado is None:
         logger.warning("Marcador '%s' não encontrado em system_prompt_consultor_otimizado.md", _MARKER)
-        return text
-    return text[:idx].strip()
+        return text.strip()
+    return text[:achado.start()].strip()
 
 
 def _build_dynamic(session: Session) -> str:
@@ -134,3 +144,22 @@ def build_system_prompt() -> str:
     prompt = f"{fixed}\n\n{_MARKER}\n{dynamic}"
     logger.debug("system_prompt: %d chars (%d fixed + %d dynamic)", len(prompt), len(fixed), len(dynamic))
     return prompt
+
+
+def build_system_blocks() -> list[dict]:
+    """
+    O mesmo prompt de build_system_prompt, em dois blocos para o cache de prompt da API.
+
+    A parte fixa (~6 mil tokens, igual em toda chamada) leva o `cache_control`; o contexto
+    dinâmico (perfil, alvos, tese, planos — muda quando o dono edita) fica depois do ponto
+    de cache. As tools vêm antes do system no prefixo e entram no cache junto. Cada
+    iteração do loop reenvia tudo: sem cache, a parte fixa seria cobrada inteira a cada
+    chamada.
+    """
+    fixed = _fixed_part()
+    with Session(engine) as session:
+        dynamic = _build_dynamic(session)
+    return [
+        {"type": "text", "text": fixed, "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": f"{_MARKER}\n{dynamic}"},
+    ]

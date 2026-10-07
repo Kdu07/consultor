@@ -14,6 +14,9 @@ export const ORDEM_CLASSES: Classe[] = [
   'RF',
   'FUNDO',
   'CAIXA',
+  // CRIPTO entra no FIM: preserva todos os pares adjacentes já validados e cria
+  // um único par novo (CAIXA–CRIPTO, vermelho × teal — separação CVD folgada).
+  'CRIPTO',
 ]
 
 /** Slot categórico de cada classe — a cor segue a entidade, jamais o ranking. */
@@ -26,6 +29,9 @@ const COR: Record<Classe, string> = {
   RF: 'var(--color-s6)',
   FUNDO: 'var(--color-s7)',
   CAIXA: 'var(--color-s8)',
+  // Slot 9 (teal). O fallback literal vale até o index.css ganhar --color-s9;
+  // quando o token existir, o var() passa a mandar sem mexer aqui.
+  CRIPTO: 'var(--color-s9, #1ba2a6)',
 }
 
 const ROTULO: Record<Classe, string> = {
@@ -37,6 +43,7 @@ const ROTULO: Record<Classe, string> = {
   RF: 'Renda fixa',
   FUNDO: 'Fundos',
   CAIXA: 'Caixa',
+  CRIPTO: 'Cripto',
 }
 
 export function corDaClasse(c: string): string {

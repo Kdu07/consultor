@@ -7,13 +7,17 @@ vencimento, taxa contratada e a posição de CAIXA convivendo com o cálculo de 
 """
 import logging
 import os
-from pathlib import Path
 
 import pytest
 
-logger = logging.getLogger(__name__)
+from tests.gerador_extrato import (
+    CAIXA_FIM_FIXTURE,
+    NTNB_PRECO_MEDIO_FIXTURE,
+    NTNB_TAXA_FIXTURE,
+)
+from tests.planilhas import bytes_fixture
 
-FIXTURE = Path(__file__).parent / "fixtures" / "extrato_exemplo.xlsx"
+logger = logging.getLogger(__name__)
 
 
 @pytest.fixture
@@ -57,7 +61,7 @@ def preview():
     from app.tools.btg_xlsx_parser import parse_btg_xlsx
     from app.tools.extrato import montar_preview
 
-    return montar_preview(parse_btg_xlsx(FIXTURE.read_bytes()), "extrato_exemplo.xlsx")
+    return montar_preview(parse_btg_xlsx(bytes_fixture()), "extrato_exemplo.xlsx")
 
 
 @pytest.fixture
@@ -95,12 +99,12 @@ async def test_grava_as_15_posicoes(banco_temporario, preview):
         assert len(posicoes) == 15
 
         ipca = next(p for p in posicoes if p.ticker == "Tesouro IPCA+ 2029")
-        assert ipca.preco_medio == pytest.approx(3400.62, abs=0.05)   # custo, não preço atual
+        assert ipca.preco_medio == pytest.approx(NTNB_PRECO_MEDIO_FIXTURE, abs=0.05)   # custo, não preço atual
         assert ipca.vencimento is not None and ipca.vencimento.year == 2029
-        assert ipca.taxa_contratada == "IPCA + 7,62%"
+        assert ipca.taxa_contratada == NTNB_TAXA_FIXTURE
 
         caixa = next(p for p in posicoes if p.classe.value == "CAIXA")
-        assert caixa.valor_mercado == pytest.approx(***, abs=0.01)
+        assert caixa.valor_mercado == pytest.approx(CAIXA_FIM_FIXTURE, abs=0.01)
         assert caixa.ticker is None
 
         acao = next(p for p in posicoes if p.ticker == "BBAS3")
@@ -311,7 +315,7 @@ async def test_desvio_com_caixa_sem_alvo(banco_temporario, preview):
     assert total > 0
 
     caixa = next(c for c in resultado["por_classe"] if c["classe"] == "CAIXA")
-    assert caixa["valor"] == pytest.approx(***, abs=0.01)
+    assert caixa["valor"] == pytest.approx(CAIXA_FIM_FIXTURE, abs=0.01)
     assert caixa["sem_alvo_definido"] is True
     assert caixa["percentual_alvo"] is None
     assert caixa["desvio_pp"] is None

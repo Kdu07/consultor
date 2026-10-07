@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import { ChartCandlestick, PanelLeftOpen, PanelRightClose } from 'lucide-react'
 import Composer from './Composer'
 import EstadoVazio from './EstadoVazio'
@@ -12,6 +12,9 @@ interface Props {
   toolsRodando: string[] | null
   sidebarAberta: boolean
   carteiraAberta: boolean
+  /** O rascunho vem do App: trocar para o Histórico desmonta esta tela. */
+  rascunho: string
+  onRascunho(texto: string): void
   onAbrirSidebar(): void
   onAlternarCarteira(): void
   onEnviar(texto: string): void
@@ -26,13 +29,14 @@ export default function ChatView({
   toolsRodando,
   sidebarAberta,
   carteiraAberta,
+  rascunho,
+  onRascunho,
   onAbrirSidebar,
   onAlternarCarteira,
   onEnviar,
   onParar,
   onImportar,
 }: Props) {
-  const [rascunho, setRascunho] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
   const grudadoRef = useRef(true)
 
@@ -59,7 +63,7 @@ export default function ChatView({
   function enviar() {
     const texto = rascunho.trim()
     if (!texto || ocupado) return
-    setRascunho('')
+    onRascunho('')
     onEnviar(texto)
   }
 
@@ -123,7 +127,7 @@ export default function ChatView({
 
       <Composer
         valor={rascunho}
-        onChange={setRascunho}
+        onChange={onRascunho}
         onEnviar={enviar}
         onParar={onParar}
         onAnexar={onImportar}

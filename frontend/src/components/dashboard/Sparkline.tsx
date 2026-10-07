@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useId, useRef, useState } from 'react'
 import { fmtBRL, fmtData } from '../../lib/format'
 
 export interface PontoSerie {
@@ -11,18 +11,21 @@ const A = 56
 const PAD = 3
 
 /**
- * Série única de patrimônio ao longo dos snapshots. Uma série só → sem legenda,
+ * Série única de patrimônio ao longo dos fechamentos mensais. Uma série só → sem legenda,
  * o título do card já nomeia o que está sendo mostrado. Traz crosshair +
  * tooltip, como toda linha interativa.
  */
 export default function Sparkline({ pontos }: { pontos: PontoSerie[] }) {
   const [ativo, setAtivo] = useState<number | null>(null)
   const svgRef = useRef<SVGSVGElement>(null)
+  // id único: com dois sparklines na tela, um id fixo faria o segundo usar o
+  // gradiente do primeiro.
+  const idGradiente = `grad-spark-${useId().replace(/:/g, '')}`
 
   if (pontos.length < 2) {
     return (
       <p className="py-3 text-[12px] text-ink-3">
-        Um snapshot só até agora — a linha aparece a partir do segundo.
+        Um fechamento só até agora — a linha aparece a partir do segundo.
       </p>
     )
   }
@@ -41,7 +44,7 @@ export default function Sparkline({ pontos }: { pontos: PontoSerie[] }) {
   const subiu = valores[valores.length - 1] >= valores[0]
   const cor = subiu ? 'var(--color-good)' : 'var(--color-critical)'
 
-  function mover(e: React.MouseEvent<SVGSVGElement>) {
+  function mover(e: React.PointerEvent<SVGSVGElement>) {
     const r = svgRef.current?.getBoundingClientRect()
     if (!r || r.width === 0) return
     const frac = (e.clientX - r.left) / r.width
@@ -57,20 +60,21 @@ export default function Sparkline({ pontos }: { pontos: PontoSerie[] }) {
         ref={svgRef}
         viewBox={`0 0 ${L} ${A}`}
         preserveAspectRatio="none"
-        className="h-14 w-full cursor-crosshair"
-        onMouseMove={mover}
-        onMouseLeave={() => setAtivo(null)}
+        className="h-14 w-full cursor-crosshair touch-none"
+        onPointerMove={mover}
+        onPointerDown={mover}
+        onPointerLeave={() => setAtivo(null)}
         role="img"
-        aria-label={`Patrimônio em ${pontos.length} snapshots, de ${fmtBRL(valores[0])} a ${fmtBRL(valores[valores.length - 1])}`}
+        aria-label={`Patrimônio em ${pontos.length} fechamentos, de ${fmtBRL(valores[0])} a ${fmtBRL(valores[valores.length - 1])}`}
       >
         <defs>
-          <linearGradient id="grad-spark" x1="0" y1="0" x2="0" y2="1">
+          <linearGradient id={idGradiente} x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor={cor} stopOpacity="0.22" />
             <stop offset="100%" stopColor={cor} stopOpacity="0" />
           </linearGradient>
         </defs>
 
-        <polygon points={area} fill="url(#grad-spark)" />
+        <polygon points={area} fill={`url(#${idGradiente})`} />
         <polyline
           points={linha}
           fill="none"

@@ -10,9 +10,9 @@ export default function Card({
   return (
     <section className="hairline rounded-xl bg-surface p-4">
       {(titulo || acao) && (
-        <header className="mb-3 flex items-center gap-2">
+        <header className="mb-3 flex flex-wrap items-center gap-2">
           {titulo && (
-            <h2 className="flex-1 text-[11px] font-semibold tracking-wider text-ink-3 uppercase">
+            <h2 className="min-w-[10rem] flex-1 text-[11px] font-semibold tracking-wider text-ink-3 uppercase">
               {titulo}
             </h2>
           )}

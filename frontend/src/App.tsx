@@ -4,6 +4,7 @@ import ChatView from './components/ChatView'
 import Login from './components/Login'
 import ModalImport from './components/ModalImport'
 import PainelCarteira from './components/dashboard/PainelCarteira'
+import TelaHistorico, { type AbaHistorico } from './components/historico/TelaHistorico'
 import { ProvedorToasts } from './components/Toasts'
 import {
   definirHandlerNaoAutenticado,
@@ -56,6 +57,20 @@ function Portao() {
   return <Aplicacao />
 }
 
+type Tela = 'chat' | 'historico'
+
+/**
+ * A tela vive no hash (#historico, #historico/extratos): sem router — o FastAPI
+ * só serve "/" —, mas o botão voltar do navegador funciona e dá para guardar o link.
+ */
+function lerHash(): { tela: Tela; aba: AbaHistorico } {
+  const h = window.location.hash
+  if (h.startsWith('#historico')) {
+    return { tela: 'historico', aba: h === '#historico/extratos' ? 'extratos' : 'desempenho' }
+  }
+  return { tela: 'chat', aba: 'desempenho' }
+}
+
 function Aplicacao() {
   const inicial = useMemo(() => {
     const salvas = carregarConversas()
@@ -64,6 +79,8 @@ function Aplicacao() {
 
   const [conversas, setConversas] = useState<Conversa[]>(inicial)
   const [ativaId, setAtivaId] = useState(inicial[0].id)
+  // O rascunho mora aqui, não no ChatView: trocar para o Histórico desmonta o chat.
+  const [rascunho, setRascunho] = useState('')
 
   const [streamingId, setStreamingId] = useState<string | null>(null)
   const [toolsRodando, setToolsRodando] = useState<string[] | null>(null)
@@ -74,7 +91,35 @@ function Aplicacao() {
   )
   const [carteiraAberta, setCarteiraAberta] = useState(false)
   const [importAberto, setImportAberto] = useState(false)
+  const [arquivoImport, setArquivoImport] = useState<File | null>(null)
   const [chaveRecarga, setChaveRecarga] = useState(0)
+  const [{ tela, aba }, setNavegacao] = useState(lerHash)
+
+  // O fim do turno decide o que recarregar pelo que está à vista AGORA, não no
+  // começo do turno: daí refs, e não o valor capturado pelo callback.
+  const telaRef = useRef(tela)
+  telaRef.current = tela
+  const carteiraRef = useRef(carteiraAberta)
+  carteiraRef.current = carteiraAberta
+
+  useEffect(() => {
+    const ouvir = () => setNavegacao(lerHash())
+    window.addEventListener('hashchange', ouvir)
+    window.addEventListener('popstate', ouvir)
+    return () => {
+      window.removeEventListener('hashchange', ouvir)
+      window.removeEventListener('popstate', ouvir)
+    }
+  }, [])
+
+  const irPara = useCallback((t: Tela, a: AbaHistorico = 'desempenho') => {
+    const hash = t === 'chat' ? '' : a === 'extratos' ? '#historico/extratos' : '#historico'
+    if (window.location.hash !== hash) {
+      if (hash) window.history.pushState(null, '', hash)
+      else window.history.pushState(null, '', window.location.pathname + window.location.search)
+    }
+    setNavegacao({ tela: t, aba: a })
+  }, [])
 
   const ativa =
     conversas.find((c) => c.id === ativaId) ?? conversas[0] ?? novaConversa()
@@ -166,7 +211,9 @@ function Aplicacao() {
               },
             }))
             // O turno pode ter gravado posições; só vale recarregar o que está à vista.
-            if (carteiraAberta) setChaveRecarga((k) => k + 1)
+            if (carteiraRef.current || telaRef.current === 'historico') {
+              setChaveRecarga((k) => k + 1)
+            }
           },
 
           onError: (msg) =>
@@ -183,8 +230,26 @@ function Aplicacao() {
       setStreamingId(null)
       setToolsRodando(null)
     },
-    [ativaId, carteiraAberta, ocupado, patch],
+    [ativaId, ocupado, patch],
   )
+
+  // Mensagem que chegou com o chat ocupado (ex.: um upload que terminou no meio
+  // de uma resposta) espera a vez em vez de sumir.
+  const filaRef = useRef<string | null>(null)
+  const enviarOuEnfileirar = useCallback(
+    (texto: string) => {
+      if (ocupado) filaRef.current = texto
+      else void enviar(texto)
+    },
+    [enviar, ocupado],
+  )
+  useEffect(() => {
+    if (!ocupado && filaRef.current) {
+      const texto = filaRef.current
+      filaRef.current = null
+      void enviar(texto)
+    }
+  }, [enviar, ocupado])
 
   function parar() {
     abortRef.current?.abort()
@@ -198,6 +263,7 @@ function Aplicacao() {
     const nova = novaConversa()
     setConversas((cs) => [nova, ...cs])
     setAtivaId(nova.id)
+    irPara('chat')
     if (window.innerWidth < 1024) setSidebarAberta(false)
   }
 
@@ -217,13 +283,42 @@ function Aplicacao() {
 
   function selecionar(id: string) {
     setAtivaId(id)
+    irPara('chat')
     if (window.innerWidth < 1024) setSidebarAberta(false)
   }
 
   function abrirCarteira() {
+    irPara('chat')
     setCarteiraAberta(true)
     setChaveRecarga((k) => k + 1)
     if (window.innerWidth < 1024) setSidebarAberta(false)
+  }
+
+  function abrirHistorico(a: AbaHistorico = 'desempenho') {
+    irPara('historico', a)
+    setChaveRecarga((k) => k + 1)
+    if (window.innerWidth < 1024) setSidebarAberta(false)
+    if (window.innerWidth < 1280) setCarteiraAberta(false)
+  }
+
+  function abrirImport(arquivo?: File) {
+    setArquivoImport(arquivo ?? null)
+    setImportAberto(true)
+  }
+
+  // Callbacks estáveis: o modal os guarda em ref, mas não há por que recriá-los
+  // a cada token do streaming.
+  const fecharImport = useCallback(() => setImportAberto(false), [])
+  const aoImportar = useCallback(() => {
+    // O preview vai para o chat: é lá que o consultor mostra e pede o "sim".
+    irPara('chat')
+    enviarOuEnfileirar('Importe o extrato que acabei de enviar.')
+  }, [enviarOuEnfileirar, irPara])
+
+  function perguntar(texto: string) {
+    irPara('chat')
+    if (window.innerWidth < 1280) setCarteiraAberta(false)
+    enviarOuEnfileirar(texto)
   }
 
   return (
@@ -237,35 +332,51 @@ function Aplicacao() {
           <div className="fixed inset-y-0 left-0 z-40 lg:static lg:z-auto">
             <Sidebar
               conversas={conversas}
-              ativaId={ativa.id}
+              ativaId={tela === 'chat' ? ativa.id : ''}
+              historicoAtivo={tela === 'historico'}
               onSelecionar={selecionar}
               onNova={criarConversa}
               onExcluir={excluir}
               onFechar={() => setSidebarAberta(false)}
-              onImportar={() => setImportAberto(true)}
+              onImportar={() => abrirImport()}
               onAbrirCarteira={abrirCarteira}
+              onAbrirHistorico={() => abrirHistorico()}
             />
           </div>
         </>
       )}
 
-      <ChatView
-        conversa={ativa}
-        ocupado={ocupado}
-        streamingId={streamingId}
-        toolsRodando={toolsRodando}
-        sidebarAberta={sidebarAberta}
-        carteiraAberta={carteiraAberta}
-        onAbrirSidebar={() => setSidebarAberta(true)}
-        onAlternarCarteira={() =>
-          carteiraAberta ? setCarteiraAberta(false) : abrirCarteira()
-        }
-        onEnviar={(t) => void enviar(t)}
-        onParar={parar}
-        onImportar={() => setImportAberto(true)}
-      />
+      {tela === 'historico' ? (
+        <TelaHistorico
+          aba={aba}
+          onAba={(a) => irPara('historico', a)}
+          sidebarAberta={sidebarAberta}
+          onAbrirSidebar={() => setSidebarAberta(true)}
+          chaveRecarga={chaveRecarga}
+          onPerguntar={perguntar}
+          onImportar={abrirImport}
+        />
+      ) : (
+        <ChatView
+          conversa={ativa}
+          ocupado={ocupado}
+          streamingId={streamingId}
+          toolsRodando={toolsRodando}
+          sidebarAberta={sidebarAberta}
+          carteiraAberta={carteiraAberta}
+          rascunho={rascunho}
+          onRascunho={setRascunho}
+          onAbrirSidebar={() => setSidebarAberta(true)}
+          onAlternarCarteira={() =>
+            carteiraAberta ? setCarteiraAberta(false) : abrirCarteira()
+          }
+          onEnviar={(t) => void enviar(t)}
+          onParar={parar}
+          onImportar={() => abrirImport()}
+        />
+      )}
 
-      {carteiraAberta && (
+      {carteiraAberta && tela === 'chat' && (
         <>
           <div
             className="fixed inset-0 z-30 bg-black/60 xl:hidden"
@@ -276,10 +387,8 @@ function Aplicacao() {
           <div className="fixed inset-y-0 right-0 z-40 w-full max-w-[560px] xl:static xl:z-auto xl:w-auto xl:max-w-none xl:shrink-0">
             <PainelCarteira
               onFechar={() => setCarteiraAberta(false)}
-              onPerguntar={(t) => {
-                if (window.innerWidth < 1280) setCarteiraAberta(false)
-                void enviar(t)
-              }}
+              onPerguntar={perguntar}
+              onAbrirHistorico={() => abrirHistorico()}
               chaveRecarga={chaveRecarga}
             />
           </div>
@@ -288,10 +397,9 @@ function Aplicacao() {
 
       <ModalImport
         aberto={importAberto}
-        onFechar={() => setImportAberto(false)}
-        onImportado={() =>
-          void enviar('Importe o extrato que acabei de enviar.')
-        }
+        arquivoInicial={arquivoImport}
+        onFechar={fecharImport}
+        onImportado={aoImportar}
       />
     </div>
   )

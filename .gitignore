@@ -2,10 +2,10 @@
 .env
 
 # Extratos do BTG — dados pessoais (nome, CPF, agência/conta). Nunca no repo.
+# Sem exceções: a fixture de teste é 100% sintética e gerada em memória
+# (tests/gerador_extrato.py) — nenhum XLSX é versionado.
 *.xlsx
 *.xls
-# Exceção: a fixture de teste é anonimizada (nome/CPF/conta fictícios).
-!tests/fixtures/*.xlsx
 
 # Banco de dados local e seus backups
 data/

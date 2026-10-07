@@ -3,6 +3,7 @@ Endpoint de dashboard — retorna dados da carteira para a UI sem invocar o loop
 Usa cache de cotações (QuoteCache) para preços recentes.
 GET /dashboard
 """
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -15,7 +16,7 @@ from ..models.alvo import AlvoAtivo, AlvoClasse
 from ..models.config_rebalanceamento import ConfigRebalanceamento
 from ..models.posicao import ClasseAtivo, Posicao
 from ..models.quote_cache import QuoteCache
-from ..models.snapshot_mensal import SnapshotMensal
+from ..models.extrato import ExtratoImportado
 from ..tools.valuation import valor_offline
 
 logger = logging.getLogger(__name__)
@@ -61,13 +62,41 @@ def get_dashboard():
                         "as_of": row.fetched_at.isoformat(),
                     }
 
-        # Snapshot mais recente
-        ultimo_snap = session.exec(
-            select(SnapshotMensal).order_by(SnapshotMensal.data_referencia.desc())
+        # Último fechamento arquivado: a base do "Δ desde o fechamento" do painel. O
+        # total_valor_mercado é a soma das posições do extrato — a mesma base do total
+        # ao vivo acima (sem valores em trânsito).
+        ultimo_fechamento = session.exec(
+            select(ExtratoImportado).order_by(ExtratoImportado.data_referencia.desc())
         ).first()
 
     alvos_classe = {a.classe.value: a.percentual for a in alvos_classe_rows}
     alvos_ativo = {a.identificador.upper(): a.percentual for a in alvos_ativo_rows}
+
+    # ------------------------------------------------------------------
+    # Grandezas do Sumário do último extrato (vocabulário oficial):
+    #   valor_posicoes    — Σ posições, sem valores em trânsito (= total_valor_mercado)
+    #   patrimonio_bruto  — Total Bruto do Sumário, com trânsito (o nº do histórico)
+    #   saldo_liquido_btg — Total LÍQUIDO do Sumário: o número que o app do BTG
+    #                       tende a mostrar — serve para conferência direta.
+    # Payload v1/v2 não tem sumário/validação → campos ficam None.
+    # ------------------------------------------------------------------
+    patrimonio_bruto: float | None = None
+    saldo_liquido_btg: float | None = None
+    validacao_veredito: str | None = None
+    if ultimo_fechamento:
+        try:
+            payload_fechamento = json.loads(ultimo_fechamento.payload_json or "{}")
+        except (TypeError, ValueError):
+            logger.warning("dashboard: payload ilegível no extrato id=%s", ultimo_fechamento.id)
+            payload_fechamento = {}
+        total_sumario = (
+            ((payload_fechamento.get("sumario") or {}).get("atual") or {}).get("total") or {}
+        )
+        bruto = total_sumario.get("bruto")
+        liquido = total_sumario.get("liquido")
+        patrimonio_bruto = round(float(bruto), 2) if bruto is not None else None
+        saldo_liquido_btg = round(float(liquido), 2) if liquido is not None else None
+        validacao_veredito = (payload_fechamento.get("validacao") or {}).get("veredito")
 
     # ------------------------------------------------------------------
     # Calcula valor de cada posição
@@ -178,10 +207,15 @@ def get_dashboard():
         "data_ultima_atualizacao_posicoes": (
             data_ultima_pos.isoformat() if data_ultima_pos else None
         ),
-        "ultimo_snapshot": {
-            "data": ultimo_snap.data_referencia.isoformat(),
-            "valor_total": ultimo_snap.valor_total,
-        } if ultimo_snap else None,
+        "ultimo_fechamento": {
+            "data": ultimo_fechamento.data_referencia.isoformat(),
+            "valor_total": ultimo_fechamento.total_valor_mercado,
+            # valor_total mantido por compatibilidade; valor_posicoes é o nome oficial.
+            "valor_posicoes": ultimo_fechamento.total_valor_mercado,
+            "patrimonio_bruto": patrimonio_bruto,
+            "saldo_liquido_btg": saldo_liquido_btg,
+            "validacao_veredito": validacao_veredito,
+        } if ultimo_fechamento else None,
         "posicoes": posicoes_data,
         "por_classe": por_classe,
         "tem_alvos": bool(alvos_classe),

@@ -5,7 +5,6 @@ O que estes testes protegem, além do caminho feliz: a tool NUNCA grava (guardra
 o preview só existe depois de um upload.
 """
 import logging
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,10 +12,15 @@ from fastapi.testclient import TestClient
 from app.api.extrato import router as extrato_router
 from app.tools import extrato_staging
 from app.tools.extrato import tool_importar_extrato
+from tests.gerador_extrato import (
+    DATA_REFERENCIA_FIXTURE,
+    PROVENTOS_LIQUIDOS_FIXTURE,
+    TOTAL_POSICOES_FIXTURE,
+    VARIACAO_MES_FIXTURE,
+)
+from tests.planilhas import bytes_fixture
 
 logger = logging.getLogger(__name__)
-
-FIXTURE = Path(__file__).parent / "fixtures" / "extrato_exemplo.xlsx"
 
 
 @pytest.fixture
@@ -32,15 +36,14 @@ def client():
 
 
 def _upload(client):
-    with FIXTURE.open("rb") as fh:
-        return client.post(
-            "/extrato/upload",
-            files={"arquivo": (
-                "extrato_exemplo.xlsx",
-                fh,
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )},
-        )
+    return client.post(
+        "/extrato/upload",
+        files={"arquivo": (
+            "extrato_exemplo.xlsx",
+            bytes_fixture(),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )},
+    )
 
 
 def test_upload_devolve_preview(client):
@@ -48,12 +51,16 @@ def test_upload_devolve_preview(client):
     assert resp.status_code == 200, resp.text
 
     preview = resp.json()
-    assert preview["total_posicoes"] == 15
-    assert preview["data_referencia"] == "2026-07-31"
+    assert preview["total_posicoes"] == TOTAL_POSICOES_FIXTURE
+    assert preview["data_referencia"] == DATA_REFERENCIA_FIXTURE
     assert preview["source"] == "extrato_btg_xlsx"
     assert preview["checagem_totais"]["ok"] is True
-    assert preview["proventos_do_mes"]["total_liquido"] == pytest.approx(127.04, abs=0.01)
-    assert preview["comparativo_mes_anterior"]["variacao_reais"] == pytest.approx(431.36, abs=0.01)
+    assert preview["proventos_do_mes"]["total_liquido"] == pytest.approx(
+        PROVENTOS_LIQUIDOS_FIXTURE, abs=0.01
+    )
+    assert preview["comparativo_mes_anterior"]["variacao_reais"] == pytest.approx(
+        VARIACAO_MES_FIXTURE, abs=0.01
+    )
     assert "PREVIEW" in preview["aviso"]
 
 
@@ -91,7 +98,7 @@ async def test_tool_le_o_upload(client):
     resultado = await tool_importar_extrato()
 
     assert "error" not in resultado
-    assert resultado["total_posicoes"] == 15
+    assert resultado["total_posicoes"] == TOTAL_POSICOES_FIXTURE
     assert resultado["arquivo"] == "extrato_exemplo.xlsx"
     assert resultado["recebido_em"]
     # O preview é só leitura — as posições vêm no formato aceito por gravar_posicoes.

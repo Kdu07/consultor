@@ -2,9 +2,10 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   ArrowDownRight,
   ArrowUpRight,
-  CameraIcon,
+  ChartLine,
   Minus,
   RefreshCw,
+  TriangleAlert,
   X,
 } from 'lucide-react'
 import Card from './Card'
@@ -14,20 +15,19 @@ import BulletsClasse from './BulletsClasse'
 import TabelaPosicoes from './TabelaPosicoes'
 import CardRebalanceamento from './CardRebalanceamento'
 import {
-  criarSnapshot,
   getDashboard,
+  getHistoricoExtratos,
   getRebalanceamento,
-  getSnapshots,
   type Dashboard,
+  type ExtratoResumo,
   type Rebalanceamento,
-  type Snapshot,
 } from '../../lib/api'
 import { fmtBRL, fmtData, fmtDataHora, fmtPct } from '../../lib/format'
-import { useToast } from '../Toasts'
 
 interface Props {
   onFechar(): void
   onPerguntar(texto: string): void
+  onAbrirHistorico(): void
   /** Muda quando algo externo (um import, por exemplo) exige recarregar. */
   chaveRecarga: number
 }
@@ -35,12 +35,12 @@ interface Props {
 export default function PainelCarteira({
   onFechar,
   onPerguntar,
+  onAbrirHistorico,
   chaveRecarga,
 }: Props) {
-  const toast = useToast()
   const [dados, setDados] = useState<Dashboard | null>(null)
   const [rebal, setRebal] = useState<Rebalanceamento | null>(null)
-  const [snaps, setSnaps] = useState<Snapshot[]>([])
+  const [fechamentos, setFechamentos] = useState<ExtratoResumo[]>([])
   const [carregando, setCarregando] = useState(true)
   const [carregandoRebal, setCarregandoRebal] = useState(true)
   const [erro, setErro] = useState<string | null>(null)
@@ -64,29 +64,21 @@ export default function PainelCarteira({
       .catch(() => setRebal({ error: 'Não consegui analisar agora.' }))
       .finally(() => setCarregandoRebal(false))
 
-    getSnapshots()
-      .then(setSnaps)
-      .catch(() => setSnaps([]))
+    getHistoricoExtratos()
+      .then(setFechamentos)
+      .catch(() => setFechamentos([]))
   }, [])
 
   useEffect(() => {
     void carregar()
   }, [carregar, chaveRecarga])
 
-  async function tirarSnapshot() {
-    try {
-      const s = await criarSnapshot()
-      toast('ok', `Snapshot de ${fmtBRL(s.valor_total)} salvo com ${s.posicoes_count} posições.`)
-      void carregar()
-    } catch (e) {
-      toast('erro', (e as Error).message)
-    }
-  }
-
   const vazia = !carregando && dados && dados.posicoes.length === 0
 
-  // Δ contra o snapshot mais recente — o único ponto de comparação que existe.
-  const ultimo = snaps[0]
+  // Δ contra o último fechamento de extrato. A base é a soma das posições daquele
+  // extrato — a mesma do total ao vivo acima (nenhum dos dois conta valores em
+  // trânsito). Variação de saldo, não rentabilidade: inclui aportes.
+  const ultimo = dados?.ultimo_fechamento ?? null
   const delta =
     dados && ultimo && ultimo.valor_total > 0
       ? dados.total - ultimo.valor_total
@@ -94,9 +86,12 @@ export default function PainelCarteira({
   const deltaPct =
     delta !== null && ultimo ? (delta / ultimo.valor_total) * 100 : null
 
-  const serie = [...snaps]
+  // Série = os fechamentos mensais do extrato (decisão 2 do dono): o patrimônio
+  // oficial do BTG em cada fim de mês.
+  const serie = fechamentos
+    .filter((f) => f.periodo_mensal && f.patrimonio !== null)
     .sort((a, b) => a.data_referencia.localeCompare(b.data_referencia))
-    .map((s) => ({ rotulo: s.data_referencia, valor: s.valor_total }))
+    .map((f) => ({ rotulo: f.data_referencia, valor: f.patrimonio! }))
 
   return (
     <div className="flex h-full w-full flex-col bg-plane xl:w-[520px] xl:shrink-0 xl:border-l xl:border-white/7">
@@ -110,11 +105,11 @@ export default function PainelCarteira({
           <RefreshCw size={15} className={carregando ? 'animate-spin' : ''} />
         </button>
         <button
-          onClick={tirarSnapshot}
-          title="Tirar snapshot mensal"
+          onClick={onAbrirHistorico}
+          title="Ver histórico e desempenho"
           className="rounded-md p-1.5 text-ink-3 transition-colors hover:bg-surface-2 hover:text-ink"
         >
-          <CameraIcon size={15} />
+          <ChartLine size={15} />
         </button>
         <button
           onClick={onFechar}
@@ -156,22 +151,64 @@ export default function PainelCarteira({
               <p className="text-[11px] font-semibold tracking-wider text-ink-3 uppercase">
                 Patrimônio total
               </p>
-              <p className="mt-1 text-[clamp(30px,5vw,44px)] leading-none font-semibold">
+              <p
+                className="mt-1 text-[clamp(30px,5vw,44px)] leading-none font-semibold"
+                title="Estimativa ao vivo: soma das posições com cotações recentes quando há — sem valores em trânsito. Não é o número do extrato nem o do app BTG."
+              >
                 {fmtBRL(dados.total)}
+              </p>
+              <p className="mt-1 text-[11px] text-ink-3">
+                estimativa ao vivo — soma das posições, sem valores em trânsito
               </p>
 
               {delta !== null && (
                 <DeltaLinha
                   valor={delta}
                   pct={deltaPct}
-                  referencia={ultimo!.data_referencia}
+                  referencia={ultimo!.data}
                 />
               )}
 
+              {ultimo?.saldo_liquido_btg != null && (
+                <p
+                  className="mt-1.5 text-[11px] text-ink-3"
+                  title="Total Líquido do Sumário do extrato — é o número que o app do BTG costuma mostrar."
+                >
+                  Conferir com o app BTG — saldo líquido do extrato de{' '}
+                  {fmtData(ultimo.data)}:{' '}
+                  <span className="font-medium text-ink-2 tabular-nums">
+                    {fmtBRL(ultimo.saldo_liquido_btg)}
+                  </span>
+                </p>
+              )}
+
+              {(ultimo?.validacao_veredito === 'erro' ||
+                ultimo?.validacao_veredito === 'aviso') && (
+                <p
+                  className={`mt-1.5 flex items-center gap-1.5 text-[11px] ${
+                    ultimo.validacao_veredito === 'erro'
+                      ? 'text-critical'
+                      : 'text-warn'
+                  }`}
+                  title="As conferências internas do último extrato não fecharam — abra o mês no histórico para ver os checks."
+                >
+                  <TriangleAlert size={12} className="shrink-0" aria-hidden="true" />
+                  conferência do extrato com{' '}
+                  {ultimo.validacao_veredito === 'erro' ? 'erro(s)' : 'aviso(s)'}
+                </p>
+              )}
+
               {serie.length >= 2 && (
-                <div className="mt-3">
+                <button
+                  onClick={onAbrirHistorico}
+                  className="mt-3 block w-full text-left"
+                  title="Ver o histórico completo"
+                >
                   <Sparkline pontos={serie} />
-                </div>
+                  <span className="mt-1 block text-[10.5px] text-ink-3">
+                    fechamentos mensais — total bruto BTG, com valores em trânsito
+                  </span>
+                </button>
               )}
 
               <dl className="mt-3 grid grid-cols-3 gap-3 border-t border-line pt-3">
@@ -253,7 +290,7 @@ function DeltaLinha({
         {pct !== null && !parado && ` (${pct > 0 ? '+' : ''}${pct.toFixed(1)}%)`}
       </span>
       <span className="text-ink-3">
-        desde o snapshot de {fmtData(referencia)}
+        desde o fechamento de {fmtData(referencia)}
       </span>
     </p>
   )

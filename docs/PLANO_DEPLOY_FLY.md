@@ -261,7 +261,8 @@ O streaming não atrapalha aqui: `frontend/src/lib/api.ts:156` consome
 11. **Backup automatizado**: `scripts/backup_remoto.ps1` puxando o `.db` semanalmente
     (passo manual 8).
 12. **Snapshot mensal agendado**: `fly machine run` semanal chamando `POST /snapshots`,
-    ou simplesmente continuar clicando na UI.
+    ou simplesmente continuar clicando na UI. *(Obsoleto desde o histórico de desempenho:
+    `POST /snapshots` e o botão saíram — a série vem dos extratos arquivados.)*
 
 ---
 
@@ -638,3 +639,55 @@ fly secrets set NOME=valor    # reinicia a máquina e zera o histórico do chat 
 Em aberto, por decisão do dono: token da brapi, backup agendado, alerta de gasto e
 retenção de snapshots de 30 dias no dashboard do Fly, domínio próprio e imagem enxuta
 (Bloco D).
+
+### Histórico de desempenho (10/2026) — o que muda no deploy
+
+Sem migração: o `create_all` do boot cria as tabelas novas `regralancamento`,
+`indicadormensal` e `referenciacarteira`, e a semente grava a data de corte da carteira a
+partir das posições ativas (em produção, 2026-09-30 — ver §10). Nenhuma coluna muda nas tabelas
+existentes. A rota `/desempenho` entra atrás da autenticação como as demais, e o servidor
+passa a consultar o BCB (SGS) — só para meses fechados que ainda não estão em
+`indicadormensal`. Antes de publicar, o backup do passo 8. Rotina depois do deploy e
+rollback: [PLANO_HISTORICO.md](PLANO_HISTORICO.md), "Deploy e rotina pós-deploy".
+
+## 10. Deploy do histórico de desempenho (rev. 5 — 06/10/2026)
+
+Release **v2**, imagem `registry.fly.io/consultor:deployment-01M47NMST93DTCWS36YKFJBM1W`
+(181 MB). A anterior, para rollback, é a v1:
+`registry.fly.io/consultor:deployment-01M4713P8GJG0S2N47DDFGVYQ8`
+(`fly deploy -a consultor --image <imagem>`). A v1 convive com as tabelas novas e com os
+extratos arquivados no formato novo, então voltar não exige mexer no banco.
+
+### Antes
+
+- **Backup** pelo passo 8: `backups/carteira-fly-20261006-pre-historico.db` (110 KB,
+  `integrity_check: ok`). O banco tinha mudado desde a rev. 4: o dono importou setembro pelo
+  chat em 05/10 — 15 posições com `as_of` 2026-09-30, um extrato arquivado (2026-09-30) e 4
+  `snapshotmensal`.
+- **Testes em Python 3.12.4** (o da imagem; o .venv local é 3.14) com as dependências do
+  `uv.lock`: 190 verdes.
+- **Ensaio** com o código novo contra uma cópia desse backup: boot criou as três tabelas e
+  semeou o corte em 2026-09-30; `/extrato/historico`, `/desempenho`, composição, CSV e regras
+  responderam; o lote com a fixture de julho saiu "novo" com +0,969%.
+
+### Onde a execução diferiu
+
+- No Git Bash, `fly ssh sftp get /data/...` virou `C:/Program Files/Git/data/...` (conversão
+  de caminho do MSYS): rodar com `MSYS_NO_PATHCONV=1`. No PowerShell não acontece.
+- O código publicado é o do working tree, ainda **sem commit** — a imagem não corresponde a
+  um commit até o dono pedir o commit.
+
+### Validação feita
+
+- `fly deploy --remote-only`: máquina `82d1e40c7740e8` atualizada no lugar e saudável. Um
+  único "health check failed" 2 s antes do uvicorn terminar de subir; os seguintes passam.
+- Sem cookie: `/health/live` e `/` 200; `/desempenho*`, `/extrato/historico`,
+  `/extrato/regras`, `/extrato/comparar`, `POST /extrato/lote` → **401**. O frontend servido
+  tem os mesmos hashes do build local.
+- Boot: "ReferenciaCarteira semeada com 2026-09-30".
+- De dentro da máquina (script só leitura, apagado depois): tabelas novas presentes, corte
+  2026-09-30 (semente), 15 posições ativas, extrato de 2026-09-30, 0 regras, `quick_check` ok;
+  system prompt com a parte fixa inteira (21 mil caracteres) e `cache_control`; BCB responde a
+  partir de gru (CDI diário de set/26, IPCA de ago/26).
+- Não validado por mim (exige a senha): telas logadas e o custo com cache — o log do loop
+  passa a mostrar `cache N gravado / N lido` em cada pergunta.

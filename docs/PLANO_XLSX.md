@@ -2,14 +2,15 @@
 
 > ## ✅ EXECUTADO em 2026-08-05 — todos os 8 blocos concluídos
 >
-> 34 testes verdes. Extrato real 07/2026: 15/15 posições, R$ ***, checksum ok.
+> 34 testes verdes. Extrato real 07/2026: 15/15 posições lidas, checksum ok.
 > **Nada foi commitado** — a working tree tem também as Fases 4–5 pendentes de commit
 > (ver [PLANO_CORRECOES.md](PLANO_CORRECOES.md) Bloco 0).
 >
 > **Onde a execução divergiu do plano (e por quê):**
-> - **Tolerância do checksum: R$ 0,05 → R$ 1,00.** O extrato real diverge R$ 0,11 sozinho —
->   o Saldo Bruto de RV do Sumário (***) não bate com a soma das próprias linhas de
->   posição (***). Com 0,05 todo import legítimo dispararia alarme falso. Ver o
+> - **Tolerância do checksum: R$ 0,05 → R$ 1,00.** O extrato real diverge alguns centavos
+>   sozinho — o Saldo Bruto de RV do Sumário não bate com a soma das próprias linhas de
+>   posição (descobriu-se depois: é o resultado acumulado do aluguel de ações, que o
+>   Sumário soma à RV). Com 0,05 todo import legítimo dispararia alarme falso. Ver o
 >   comentário em `btg_xlsx_parser.py`.
 > - **Bloco 6a: escolhida a via das colunas novas**, não o campo `notas`. `vencimento` e
 >   `taxa_contratada` viraram colunas de `Posicao`, com `scripts/migrate_posicao_rf.py`
@@ -30,7 +31,7 @@
 
 > **Contexto original do plano.** Autossuficiente: contexto, guardrails, mapeamento do
 > arquivo e blocos de trabalho na ordem. Gerado em 2026-08-04 após inspeção do arquivo real
-> `001234567.xlsx` (extrato BTG de 07/2026). Guardrails gerais do projeto: ver
+> do extrato BTG de 07/2026 (em `uploads/`, fora do git). Guardrails gerais do projeto: ver
 > [PLANO_CORRECOES.md](PLANO_CORRECOES.md) §1 — continuam valendo integralmente.
 
 ---
@@ -47,7 +48,7 @@ não dava e que o parser de texto jamais teria:
 | Dado novo | Onde está | Para que serve |
 |---|---|---|
 | Custo de aquisição real do Tesouro, por lote | aba `Renda Fixa`, blocos `Detalhamento >` | `preco_medio` correto (hoje o Tesouro grava o preço *atual* como se fosse custo) |
-| Taxa contratada (`SELIC + 0,10%`, `IPCA + 7,62%`, `13,03% a.a.`) | `Renda Fixa`, coluna *Taxa Média Ponderada* | análise real de RF; hoje inexistente no sistema |
+| Taxa contratada (`SELIC + 0,10%`, `IPCA + 7,62%`, `13,00% a.a.`) | `Renda Fixa`, coluna *Taxa Média Ponderada* | análise real de RF; hoje inexistente no sistema |
 | Vencimento exato (`2031-03-01`) | `Renda Fixa` | prazo/duration e casamento robusto com o TesouroProvider (resolve o **G4**) |
 | Totais do mês anterior e do mês atual | aba `Sumario` | **checksum do import** e comparativo mensal |
 | Proventos do mês (JCP, rendimentos de FII) | `Renda Variavel`/`Conta Corrente`, blocos `Movimentação >` | renda passiva do mês, comentável no preview |
@@ -61,6 +62,10 @@ não dava e que o parser de texto jamais teria:
    `preco_medio` do Tesouro, que hoje é o preço atual.
 3. **Movimentações (proventos, aluguel) não são persistidas** — aparecem no preview do import
    para o agente comentar, e só. Sem tabela nova, sem migração de schema por conta disso.
+   > **Superada (10/2026):** o extrato inteiro de cada mês passou a ser arquivado
+   > (`extratoimportado`, commit `de2dc39`) e, com o histórico de desempenho, o parser lê também
+   > o razão da conta corrente e os lotes de renda fixa. Ver
+   > [PLANO_HISTORICO.md](PLANO_HISTORICO.md).
 
 ---
 
@@ -85,7 +90,7 @@ Além dos 10 guardrails da §1 do [PLANO_CORRECOES.md](PLANO_CORRECOES.md):
 
 ---
 
-## 2. Mapeamento do arquivo real (`001234567.xlsx`, 07/2026)
+## 2. Mapeamento do arquivo real (extrato BTG de 07/2026)
 
 Sete abas: `Capa`, `Sumario`, `Renda Fixa`, `Renda Variavel`, `Conta Corrente`,
 `Valores em Trânsito`, `Fale Conosco`.
@@ -105,32 +110,35 @@ FII não terá o bloco de FIIs; um mês com CDB terá um bloco novo).
 Extrato da Conta Investimento
 Período de 01/07/26 a 31/07/26     → data_referencia = 2026-07-31 (fim do período)
 Emitido em 04/08/26 23:29
-*** / Banco: BTG Pactual / Conta Controle: 001234567 / CPF: ...
+<NOME DO TITULAR> / Banco: BTG Pactual / Conta Controle: <número> / CPF: ...
 ```
 `data_referencia` sai do **fim do período**. Se a linha não casar, o import falha com
 `tool_error` — não inventar data (guardrail 1 do projeto).
 
 ### 2.2 `Sumario` — checksum
 Colunas: `Mercados | Saldo Bruto 30/06/26 | Saldo Líquido 30/06/26 | Saldo Bruto 31/07/26 | Saldo Líquido 31/07/26`.
-Linhas: Renda Variável `25727,00` · Renda Fixa `18888,87` · Conta Corrente `***` ·
-Valores em Trânsito `***` · **Total `44945,77`**.
+Linhas (valores ilustrativos, da fixture SINTÉTICA de `tests/gerador_extrato.py` — nenhum
+número real da carteira fica em arquivo versionado): Renda Variável `25.001,37` ·
+Renda Fixa `18.240,00` · Conta Corrente `281,92` · Valores em Trânsito `65,00` ·
+**Total `43.588,29`**.
 
 Os rótulos das colunas de data **mudam todo mês** → identificar as colunas do mês corrente
 como as **duas últimas**, não por texto de data.
 
-Conferência esperada: `Σ(ações+ETF+FIIs) = ***` ≈ RV do sumário (arredondamento de
-centavo é normal — daí a tolerância); `Σ(Tesouro) = ***` = RF; `CAIXA = ***`.
+Conferência esperada: `Σ(ações+ETF+FIIs) = 25.000,00` ≈ RV do sumário (a diferença de
+centavos é o resultado acumulado do aluguel, que o Sumário soma à RV — daí a tolerância);
+`Σ(Tesouro) = 18.240,00` = RF; `CAIXA = 281,92`.
 
 ### 2.3 `Renda Variavel`
 - `Posição > Ações` → `Código | Ação | Qtde. | Preço Fechamento R$ | Preço Médio R$ | Saldo Bruto R$`
   (5 papéis; nomes vêm com espaços múltiplos: `BRASIL      ON      NM` → colapsar whitespace).
 - `Posição > ETF` → mesmas colunas (IVVB11).
 - `Posição > Fundos Listados` → tem coluna extra `Tipo` (`FII`) entre nome e quantidade.
-- `Posição > Ações | Aluguel` → **NÃO é posição.** TAEE11 aparece aqui como doador
-  (R$ ***) **e** na posição de Ações (R$ ***). Somar os dois duplica o papel. Ler apenas
+- `Posição > Ações | Aluguel` → **NÃO é posição.** TAEE11 aparece aqui como doador (valor
+  contratado próprio) **e** na posição de Ações. Somar os dois duplica o papel. Ler apenas
   como informativo (`aluguel_ativo: [...]`) no preview.
 - `Movimentação > Ações` e `Movimentação > Fundos Listados` → proventos do mês
-  (JCP ITUB4 R$ 0,71 líq.; rendimentos KNCR11/HGCR11/RBRR11 = R$ ***). Informativo.
+  (JCP de ITUB4; rendimentos de KNCR11/HGCR11/RBRR11). Informativo.
 
 ### 2.4 `Renda Fixa`
 - `Posição > TESOURO DIRETO - {LFT|LTN|NTNB-P}` → `Emissor | Ativo | Emissão | Vencimento |
@@ -138,24 +146,25 @@ centavo é normal — daí a tolerância); `Σ(Tesouro) = ***` = RF; `CAIXA = **
   **A posição consolidada sai daqui.** Cinco títulos: LFT 2031, LFT 2028, LTN 2028, LTN 2029,
   NTNB-P 2029.
 - `Detalhamento > TESOURO DIRETO - X` → **um lote por linha de aquisição**, com
-  `Preço Compra R$` e `Valor Compra R$`. A NTNB-P 2029 tem 4 lotes (R$ *** de custo total
-  para R$ *** de saldo bruto). **Fonte do custo médio ponderado.**
-- `Posição Consolidada Por Emissor` → só conferência (`BACEN... ***`).
+  `Preço Compra R$` e `Valor Compra R$`. A NTNB-P 2029 tem 4 lotes (na fixture sintética:
+  R$ 6.540,00 de custo total para R$ 7.200,00 de saldo bruto). **Fonte do custo médio
+  ponderado.**
+- `Posição Consolidada Por Emissor` → só conferência (`BACEN...` = total da RF).
 
 **Generalidade:** o bloco é `Posição > <TIPO>` com um emissor por linha. Emissor
 `BACEN-BANCO CENTRAL DO BRASIL - RJ` → classe `TESOURO`; **qualquer outro emissor** (um CDB
 futuro) → classe `RF`, ticker `None`, nome `"<Tipo> <Emissor> <vencimento>"`. Hoje não há
 nenhum no extrato, mas o parser não pode ignorar o bloco — cairia no guardrail 4 da §1.
 
-**Armadilhas numéricas:** quantidade do Tesouro é **fracionária** (`0,12`; `5,69`) — nada de
-regex `\d+`. Preço é o **preço unitário do título** (`***` para a LFT). Células vazias
-vêm como `None` e valores nulos como a string `"-"`.
+**Armadilhas numéricas:** quantidade do Tesouro é **fracionária** (`0,10`; `5,00`) — nada de
+regex `\d+`. Preço é o **preço unitário do título** (ordem de `19.000,00` para uma LFT).
+Células vazias vêm como `None` e valores nulos como a string `"-"`.
 
 ### 2.5 `Conta Corrente` e `Valores em Trânsito`
-- `Conta Corrente` / `Posição` → `Data | Valor financeiro R$` → `2026-07-31 | ***` →
+- `Conta Corrente` / `Posição` → `Data | Valor financeiro R$` → `2026-07-31 | 281,92` →
   posição `CAIXA`, nome `"Conta corrente BTG"`, ticker `None`, quantidade `1`,
-  `valor_mercado = ***`.
-- `Valores em Trânsito` → 3 JCP a liquidar (R$ ***). **Informativo.**
+  `valor_mercado = 281.92` (valores da fixture sintética).
+- `Valores em Trânsito` → 3 JCP a liquidar (fixture: R$ 65,00). **Informativo.**
 - O nome da aba tem acento (`Trânsito`): localizar aba por **nome normalizado**
   (`unicodedata.normalize` + casefold), nunca por igualdade literal.
 
@@ -211,7 +220,7 @@ UI envia ao chat: "importe o extrato que acabei de subir"      │
 | Bloco | O quê | Risco | Depende de |
 |---|---|---|---|
 | **0** | Privacidade: `.gitignore` do extrato | nenhum | — |
-| **1** | Parser XLSX + testes (fixture anonimizada) | médio | 0 |
+| **1** | Parser XLSX + testes (fixture sintética) | médio | 0 |
 | **2** | Upload REST + staging | baixo | 1 |
 | **3** | Tool `importar_extrato` sem args + schema + dispatch | baixo | 2 |
 | **4** | UI: input file no lugar do textarea | baixo | 2 |
@@ -223,7 +232,8 @@ UI envia ao chat: "importe o extrato que acabei de subir"      │
 
 ### Bloco 0 — Privacidade (fazer antes de qualquer `git add`)
 
-`001234567.xlsx` está **untracked na raiz do repo** e contém nome, CPF e número de conta.
+O extrato real está **untracked na raiz do repo** e contém nome, CPF e número de conta
+(o próprio nome do arquivo baixado do BTG é o número da conta).
 Um `git add .` distraído o commita.
 
 1. Adicionar ao `.gitignore`:
@@ -234,7 +244,7 @@ Um `git add .` distraído o commita.
    uploads/
    ```
    (`uploads/` já está lá — confirmar.)
-2. Mover o arquivo para `uploads/001234567.xlsx` (fora da raiz, já ignorado) e usar esse
+2. Mover o arquivo para `uploads/` (fora da raiz, já ignorado) e usar esse
    caminho no desenvolvimento.
 3. Confirmar que nunca foi commitado: `git log --all --oneline -- '*.xlsx'` deve sair vazio.
    (Verificado em 2026-08-04: `git ls-files | grep xlsx` vazio — está limpo.)
@@ -284,14 +294,16 @@ mês anterior e atual), `proventos`, `aluguel`, `valores_em_transito`, `linhas_i
 - Checksum (§1.3): comparar RV / RF / CAIXA e total contra o `Sumario`.
 
 **Testes (`tests/test_btg_xlsx_parser.py`) — obrigatórios neste bloco:**
-Criar `tests/fixtures/extrato_exemplo.xlsx` = **cópia anonimizada** do real (trocar nome, CPF
-e conta por valores fictícios; manter números e estrutura intactos). Essa fixture *pode* ser
-commitada — a real, não. Cobrir:
+A fixture é **100% sintética e gerada em memória** (`tests/gerador_extrato.py`): mesma
+forma do extrato real — abas, blocos, cabeçalhos, contagens — com valores inventados.
+Nenhum XLSX (nem "anonimizado") é versionado; os asserts referenciam as constantes
+`*_FIXTURE` do gerador. Cobrir:
 1. 9 posições de RV+RF (5 ações, 1 ETF, 3 FIIs, 5 Tesouro → 14) + 1 CAIXA = **15 posições**;
-2. total = `***` e checksum sem aviso;
+2. total = `TOTAL_POSICOES_VALOR_FIXTURE` e checksum sem aviso;
 3. `data_referencia == "2026-07-31"`;
 4. TAEE11 aparece **uma única vez** (regressão do bug de duplicação por aluguel);
-5. custo médio da NTNB-P 2029 = `*** / 1.92` ≈ `3400,61` (não `3797,08`);
+5. custo médio da NTNB-P 2029 = custo dos lotes / quantidade (`NTNB_PRECO_MEDIO_FIXTURE`),
+   nunca o preço atual;
 6. arquivo inválido (bytes lixo / planilha sem as abas) → erro tratado, sem exceção.
 
 **Critério de pronto:** `pytest tests/ -q` verde (3 antigos + os novos); parser roda no
@@ -315,7 +327,7 @@ arquivo real e as 15 posições batem com o Sumário.
 
 Registrar o router em [app/main.py](../app/main.py) junto dos outros (`include_router`).
 
-**Critério de pronto:** `curl -F "arquivo=@uploads/001234567.xlsx" localhost:8000/extrato/upload`
+**Critério de pronto:** `curl -F "arquivo=@uploads/<extrato>.xlsx" localhost:8000/extrato/upload`
 devolve o preview com 15 posições; segundo upload substitui o primeiro.
 **Commit:** `feat: endpoint POST /extrato/upload com staging em memória`
 
@@ -447,7 +459,8 @@ comportamento não pode quebrar.
 
 ## 6. Fora deste plano
 
-- Persistir proventos/movimentações (decisão do dono: só preview).
+- Persistir proventos/movimentações (decisão do dono: só preview — superada em 10/2026, ver
+  [PLANO_HISTORICO.md](PLANO_HISTORICO.md)).
 - Incluir Valores em Trânsito na carteira.
 - Marcar automaticamente como inativa a posição ausente do extrato novo (risco 3).
 - Manter qualquer suporte a PDF.

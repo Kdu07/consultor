@@ -25,6 +25,7 @@ import anthropic
 from ..config import get_settings
 from ..tools.ativo import tool_dados_ativo
 from ..tools.carteira import tool_ler_carteira
+from ..tools.desempenho_servico import tool_desempenho_carteira
 from ..tools.desvio import tool_calcular_desvio
 from ..tools.extrato import tool_importar_extrato
 from ..tools.gravar import tool_gravar_posicoes
@@ -34,7 +35,7 @@ from ..tools.estrategia import tool_atualizar_estrategia
 from ..tools.proposta import tool_proposta_rebalanceamento
 from ..tools.rebalanceamento import tool_sugerir_rebalanceamento
 from ..tools.schemas import TOOL_DEFINITIONS, to_tool_content
-from .system_prompt import build_system_prompt
+from .system_prompt import build_system_blocks
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,9 @@ _TOOL_DISPATCH: dict[str, Any] = {
     "sugerir_rebalanceamento":    lambda _i: tool_sugerir_rebalanceamento(),
     "atualizar_estrategia":       lambda i: tool_atualizar_estrategia(i),
     "proposta_rebalanceamento":   lambda i: tool_proposta_rebalanceamento(i["operacoes"]),
+    "desempenho_carteira":        lambda i: tool_desempenho_carteira(
+        i.get("periodo", "12m"), i.get("nivel", "carteira"), i.get("mes")
+    ),
 }
 
 
@@ -87,6 +91,10 @@ class AgentResult:
 # Preços Sonnet 4.6 por milhão de tokens (confirmar em console.anthropic.com)
 _PRICE_IN_PER_M  = 3.0   # USD por 1M tokens de entrada
 _PRICE_OUT_PER_M = 15.0  # USD por 1M tokens de saída
+# Cache de prompt (system prompt fixo + tools — ver build_system_blocks): gravar custa
+# 1,25× a entrada (TTL de 5 min); ler do cache custa 0,1×.
+_MULT_CACHE_GRAVADO = 1.25
+_MULT_CACHE_LIDO = 0.10
 
 
 # ---------------------------------------------------------------------------
@@ -112,12 +120,12 @@ async def run_agent(message: str, history: list[dict]) -> AgentResult:
         )
 
     client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-    system = build_system_prompt()
+    system = build_system_blocks()
 
     # Adiciona mensagem do usuário
     messages: list[dict] = list(history) + [{"role": "user", "content": message}]
 
-    total_in = total_out = 0
+    total_in = total_out = cache_gravado = cache_lido = 0
     last_response = None
 
     for iteration in range(1, settings.agent_max_iters + 1):
@@ -132,21 +140,22 @@ async def run_agent(message: str, history: list[dict]) -> AgentResult:
         )
         last_response = response
 
-        iter_in  = response.usage.input_tokens
-        iter_out = response.usage.output_tokens
+        iter_in, iter_out, iter_gravado, iter_lido = _uso(response.usage)
         total_in  += iter_in
         total_out += iter_out
+        cache_gravado += iter_gravado
+        cache_lido += iter_lido
 
         logger.info(
-            "iter %d: stop_reason=%s | tokens=%d in / %d out",
-            iteration, response.stop_reason, iter_in, iter_out,
+            "iter %d: stop_reason=%s | tokens=%d in / %d out | cache %d gravado / %d lido",
+            iteration, response.stop_reason, iter_in, iter_out, iter_gravado, iter_lido,
         )
 
         # --- end_turn: resposta final ---
         if response.stop_reason == "end_turn":
             text = _extract_text(response.content)
             messages.append({"role": "assistant", "content": _content_to_dicts(response.content)})
-            cost = _calc_cost(total_in, total_out)
+            cost = _calc_cost(total_in, total_out, cache_gravado, cache_lido)
             logger.info(
                 "conversa encerrada: %d iters | %d in / %d out tokens | ~US$ %.4f",
                 iteration, total_in, total_out, cost,
@@ -154,7 +163,7 @@ async def run_agent(message: str, history: list[dict]) -> AgentResult:
             return AgentResult(
                 reply=text,
                 history=messages,
-                tokens_input=total_in,
+                tokens_input=total_in + cache_gravado + cache_lido,
                 tokens_output=total_out,
                 iterations=iteration,
                 cost_usd=cost,
@@ -206,11 +215,11 @@ async def run_agent(message: str, history: list[dict]) -> AgentResult:
         if partial_text
         else "_(Não consegui concluir a consulta. Por favor, tente novamente com uma pergunta mais específica.)_"
     )
-    cost = _calc_cost(total_in, total_out)
+    cost = _calc_cost(total_in, total_out, cache_gravado, cache_lido)
     return AgentResult(
         reply=reply,
         history=messages,
-        tokens_input=total_in,
+        tokens_input=total_in + cache_gravado + cache_lido,
         tokens_output=total_out,
         iterations=settings.agent_max_iters,
         cost_usd=cost,
@@ -245,11 +254,11 @@ async def run_agent_stream(message: str, history: list[dict]) -> AsyncIterator[d
         )}
         return
 
-    # build_system_prompt() lê o banco (tese, planos): se falhar, precisa virar um
+    # build_system_blocks() lê o banco (tese, planos): se falhar, precisa virar um
     # "done", senão o SSE morre no meio sem o cliente saber por quê.
     try:
         client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-        system = build_system_prompt()
+        system = build_system_blocks()
     except Exception as e:
         logger.error("stream: falha ao montar o contexto do turno: %s", e)
         yield {"type": "done", "result": AgentResult(
@@ -261,7 +270,7 @@ async def run_agent_stream(message: str, history: list[dict]) -> AsyncIterator[d
 
     messages: list[dict] = list(history) + [{"role": "user", "content": message}]
 
-    total_in = total_out = 0
+    total_in = total_out = cache_gravado = cache_lido = 0
     # Texto do turno montado exatamente como o cliente o recebeu: os deltas entram
     # colados e a quebra de parágrafo só é inserida antes de uma rodada de tools
     # (o frontend faz o mesmo). Juntar tudo com "\n\n" no fim partiria ao meio a
@@ -289,28 +298,31 @@ async def run_agent_stream(message: str, history: list[dict]) -> AsyncIterator[d
                 reply=(f"{texto}\n\n_(A conexão com o modelo falhou no meio da resposta: {e})_"
                        if texto else f"Falha ao falar com o modelo: {e}"),
                 history=messages,
-                tokens_input=total_in,
+                tokens_input=total_in + cache_gravado + cache_lido,
                 tokens_output=total_out,
                 iterations=iteration,
-                cost_usd=_calc_cost(total_in, total_out),
+                cost_usd=_calc_cost(total_in, total_out, cache_gravado, cache_lido),
                 anomaly=True,
             )}
             return
 
-        total_in += response.usage.input_tokens
-        total_out += response.usage.output_tokens
+        iter_in, iter_out, iter_gravado, iter_lido = _uso(response.usage)
+        total_in += iter_in
+        total_out += iter_out
+        cache_gravado += iter_gravado
+        cache_lido += iter_lido
 
         texto += _extract_text(response.content)
 
         logger.info(
-            "stream iter %d: stop_reason=%s | tokens=%d in / %d out",
-            iteration, response.stop_reason, response.usage.input_tokens, response.usage.output_tokens,
+            "stream iter %d: stop_reason=%s | tokens=%d in / %d out | cache %d gravado / %d lido",
+            iteration, response.stop_reason, iter_in, iter_out, iter_gravado, iter_lido,
         )
 
         # --- end_turn: resposta final ---
         if response.stop_reason == "end_turn":
             messages.append({"role": "assistant", "content": _content_to_dicts(response.content)})
-            cost = _calc_cost(total_in, total_out)
+            cost = _calc_cost(total_in, total_out, cache_gravado, cache_lido)
             logger.info(
                 "conversa encerrada (stream): %d iters | %d in / %d out tokens | ~US$ %.4f",
                 iteration, total_in, total_out, cost,
@@ -318,7 +330,7 @@ async def run_agent_stream(message: str, history: list[dict]) -> AsyncIterator[d
             yield {"type": "done", "result": AgentResult(
                 reply=texto,
                 history=messages,
-                tokens_input=total_in,
+                tokens_input=total_in + cache_gravado + cache_lido,
                 tokens_output=total_out,
                 iterations=iteration,
                 cost_usd=cost,
@@ -365,10 +377,10 @@ async def run_agent_stream(message: str, history: list[dict]) -> AsyncIterator[d
     yield {"type": "done", "result": AgentResult(
         reply=texto + aviso,
         history=messages,
-        tokens_input=total_in,
+        tokens_input=total_in + cache_gravado + cache_lido,
         tokens_output=total_out,
         iterations=settings.agent_max_iters,
-        cost_usd=_calc_cost(total_in, total_out),
+        cost_usd=_calc_cost(total_in, total_out, cache_gravado, cache_lido),
         anomaly=True,
     )}
 
@@ -397,5 +409,20 @@ def _content_to_dicts(content: list) -> list[dict]:
     return out
 
 
-def _calc_cost(tokens_in: int, tokens_out: int) -> float:
-    return (tokens_in * _PRICE_IN_PER_M + tokens_out * _PRICE_OUT_PER_M) / 1_000_000
+def _uso(usage) -> tuple[int, int, int, int]:
+    """(entrada sem cache, saída, gravado no cache, lido do cache) de uma resposta."""
+    return (
+        usage.input_tokens,
+        usage.output_tokens,
+        getattr(usage, "cache_creation_input_tokens", 0) or 0,
+        getattr(usage, "cache_read_input_tokens", 0) or 0,
+    )
+
+
+def _calc_cost(tokens_in: int, tokens_out: int, cache_gravado: int = 0, cache_lido: int = 0) -> float:
+    entrada = (
+        tokens_in
+        + cache_gravado * _MULT_CACHE_GRAVADO
+        + cache_lido * _MULT_CACHE_LIDO
+    )
+    return (entrada * _PRICE_IN_PER_M + tokens_out * _PRICE_OUT_PER_M) / 1_000_000

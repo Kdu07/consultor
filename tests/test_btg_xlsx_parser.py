@@ -1,30 +1,50 @@
 """
 Parser do extrato XLSX do BTG (docs/PLANO_XLSX.md, Bloco 1).
 
-A fixture tests/fixtures/extrato_exemplo.xlsx é uma cópia ANONIMIZADA do extrato real
-de 07/2026 (nome, CPF, agência e conta trocados por valores fictícios; todos os números
-da carteira preservados). O extrato real nunca entra no repositório.
+A fixture é 100% SINTÉTICA (tests/gerador_extrato.py): mesma forma do extrato real —
+abas, blocos, cabeçalhos, contagens — com valores inventados. Nenhum extrato real, nem
+anonimizado, entra no repositório; os asserts referenciam as constantes do gerador.
 """
 import logging
-from pathlib import Path
 
 import pytest
 
 from app.tools.btg_xlsx_parser import ExtratoParseError, parse_btg_xlsx
+from tests.gerador_extrato import (
+    ALUGUEL_CONTRATADO_FIXTURE,
+    DATA_ANTERIOR_FIXTURE,
+    DATA_REFERENCIA_FIXTURE,
+    LFT31_PRECO_COMPRA_FIXTURE,
+    NTNB_CUSTO_TOTAL_FIXTURE,
+    NTNB_PRECO_ATUAL_FIXTURE,
+    NTNB_PRECO_MEDIO_FIXTURE,
+    NTNB_QTDE_FIXTURE,
+    NTNB_TAXA_FIXTURE,
+    NTNB_VENCIMENTO_FIXTURE,
+    PROVENTOS_LIQUIDOS_FIXTURE,
+    RF_BRUTO_FIXTURE,
+    CAIXA_FIM_FIXTURE,
+    TAEE11_QTDE_FIXTURE,
+    TAEE11_VALOR_FIXTURE,
+    TOTAL_BRUTO_FIM_FIXTURE,
+    TOTAL_BRUTO_INI_FIXTURE,
+    TOTAL_POSICOES_FIXTURE,
+    TOTAL_POSICOES_VALOR_FIXTURE,
+    TRANSITO_FIXTURE,
+)
+from tests.planilhas import bytes_fixture
 
 logger = logging.getLogger(__name__)
-
-FIXTURE = Path(__file__).parent / "fixtures" / "extrato_exemplo.xlsx"
 
 
 @pytest.fixture(scope="module")
 def extrato():
-    return parse_btg_xlsx(FIXTURE.read_bytes())
+    return parse_btg_xlsx(bytes_fixture())
 
 
 def test_data_referencia(extrato):
     """A data vem do FIM do período ('Período de 01/07/26 a 31/07/26')."""
-    assert extrato.data_referencia == "2026-07-31"
+    assert extrato.data_referencia == DATA_REFERENCIA_FIXTURE
     assert all(p.as_of for p in extrato.posicoes), "toda posição precisa de as_of"
 
 
@@ -35,52 +55,55 @@ def test_posicoes_completas(extrato):
         por_classe[p.classe] = por_classe.get(p.classe, 0) + 1
 
     assert por_classe == {"ACAO": 5, "ETF": 1, "FII": 3, "TESOURO": 5, "CAIXA": 1}
-    assert len(extrato.posicoes) == 15
+    assert len(extrato.posicoes) == TOTAL_POSICOES_FIXTURE
     assert not extrato.linhas_ignoradas, f"linhas não parseadas: {extrato.linhas_ignoradas}"
 
 
 def test_checksum_bate_com_sumario(extrato):
-    """Total das posições confere com a aba Sumario (descontados valores em trânsito)."""
+    """Total das posições confere com a aba Sumario (descontados valores em trânsito
+    e o resultado acumulado do aluguel, que o Sumário soma à RV)."""
     checagem = extrato.checagem
     assert checagem["ok"], checagem.get("aviso")
-    assert checagem["total_parseado"] == pytest.approx(***, abs=0.01)
-    assert checagem["valores_em_transito_excluidos"] == pytest.approx(***, abs=0.01)
+    assert checagem["total_parseado"] == pytest.approx(TOTAL_POSICOES_VALOR_FIXTURE, abs=0.01)
+    assert checagem["valores_em_transito_excluidos"] == pytest.approx(TRANSITO_FIXTURE, abs=0.01)
 
     por_mercado = {c["mercado"]: c for c in checagem["por_mercado"]}
-    assert por_mercado["Renda Fixa"]["parseado"] == pytest.approx(***, abs=0.01)
-    assert por_mercado["Conta Corrente"]["parseado"] == pytest.approx(***, abs=0.01)
+    assert por_mercado["Renda Fixa"]["parseado"] == pytest.approx(RF_BRUTO_FIXTURE, abs=0.01)
+    assert por_mercado["Conta Corrente"]["parseado"] == pytest.approx(CAIXA_FIM_FIXTURE, abs=0.01)
 
 
 def test_taee11_nao_duplica_com_aluguel(extrato):
     """
-    TAEE11 aparece na posição de Ações (R$ ***) E no bloco de aluguel como doador
-    (R$ ***). Somar os dois duplicaria o papel — o aluguel é só informativo.
+    TAEE11 aparece na posição de Ações E no bloco de aluguel como doador. Somar os dois
+    duplicaria o papel — o aluguel é só informativo.
     """
     taee = [p for p in extrato.posicoes if p.ticker == "TAEE11"]
     assert len(taee) == 1, "TAEE11 duplicado — o bloco de aluguel virou posição"
-    assert taee[0].valor_mercado == pytest.approx(3966.00, abs=0.01)
-    assert taee[0].quantidade == 100
+    assert taee[0].valor_mercado == pytest.approx(TAEE11_VALOR_FIXTURE, abs=0.01)
+    assert taee[0].quantidade == TAEE11_QTDE_FIXTURE
 
     assert len(extrato.aluguel) == 1
     assert extrato.aluguel[0]["ticker"] == "TAEE11"
-    assert extrato.aluguel[0]["valor_contratado"] == pytest.approx(3979.00, abs=0.01)
+    assert extrato.aluguel[0]["valor_contratado"] == pytest.approx(ALUGUEL_CONTRATADO_FIXTURE, abs=0.01)
 
 
 def test_custo_de_aquisicao_do_tesouro(extrato):
     """
     preco_medio do Tesouro é o CUSTO médio ponderado dos lotes (aba Detalhamento),
-    não o preço atual — este era o erro do parser de PDF.
-    A NTNB-P 2029 tem 4 lotes: R$ *** de custo para 1,92 título.
+    não o preço atual — este era o erro do parser de PDF. A NTNB-P da fixture tem
+    4 lotes de aquisição somando o custo total do gerador.
     """
     ipca = next(p for p in extrato.posicoes if p.ticker == "Tesouro IPCA+ 2029")
 
-    assert ipca.preco_medio == pytest.approx(3400.62, abs=0.05)
-    assert ipca.preco_medio != pytest.approx(***, abs=1.0), "gravou o preço atual como custo"
-    assert ipca.custo_total == pytest.approx(***, abs=0.01)
-    assert ipca.preco_fechamento == pytest.approx(***, abs=0.01)
-    assert ipca.quantidade == pytest.approx(1.92, abs=0.001)
-    assert ipca.vencimento == "2029-05-15"
+    assert ipca.preco_medio == pytest.approx(NTNB_PRECO_MEDIO_FIXTURE, abs=0.05)
+    assert ipca.preco_medio != pytest.approx(NTNB_PRECO_ATUAL_FIXTURE, abs=1.0), \
+        "gravou o preço atual como custo"
+    assert ipca.custo_total == pytest.approx(NTNB_CUSTO_TOTAL_FIXTURE, abs=0.01)
+    assert ipca.preco_fechamento == pytest.approx(NTNB_PRECO_ATUAL_FIXTURE, abs=0.01)
+    assert ipca.quantidade == pytest.approx(NTNB_QTDE_FIXTURE, abs=0.001)
+    assert ipca.vencimento == NTNB_VENCIMENTO_FIXTURE
     assert "IPCA" in ipca.taxa_contratada
+    assert ipca.taxa_contratada == NTNB_TAXA_FIXTURE
 
 
 def test_tesouro_separa_vencimentos(extrato):
@@ -95,7 +118,7 @@ def test_tesouro_separa_vencimentos(extrato):
     assert tesouro["Tesouro Selic 2031"].vencimento == "2031-03-01"
     assert tesouro["Tesouro Selic 2028"].vencimento == "2028-03-01"
     # lote único: o custo é o preço de compra declarado, sem erro de divisão
-    assert tesouro["Tesouro Selic 2031"].preco_medio == pytest.approx(18335.52, abs=0.01)
+    assert tesouro["Tesouro Selic 2031"].preco_medio == pytest.approx(LFT31_PRECO_COMPRA_FIXTURE, abs=0.01)
 
 
 def test_caixa_da_conta_corrente(extrato):
@@ -103,29 +126,30 @@ def test_caixa_da_conta_corrente(extrato):
     caixa = [p for p in extrato.posicoes if p.classe == "CAIXA"]
     assert len(caixa) == 1
     assert caixa[0].ticker is None
-    assert caixa[0].valor_mercado == pytest.approx(***, abs=0.01)
+    assert caixa[0].valor_mercado == pytest.approx(CAIXA_FIM_FIXTURE, abs=0.01)
 
     assert len(extrato.valores_em_transito) == 3
     total_transito = sum(v["valor"] for v in extrato.valores_em_transito)
-    assert total_transito == pytest.approx(***, abs=0.01)
-    assert all(p.classe != "CAIXA" or p.valor_mercado != pytest.approx(329.90, abs=0.01)
+    assert total_transito == pytest.approx(TRANSITO_FIXTURE, abs=0.01)
+    com_transito = round(CAIXA_FIM_FIXTURE + TRANSITO_FIXTURE, 2)
+    assert all(p.classe != "CAIXA" or p.valor_mercado != pytest.approx(com_transito, abs=0.01)
                for p in extrato.posicoes), "valores em trânsito entraram no caixa"
 
 
 def test_proventos_do_mes(extrato):
-    """JCP de ITUB4 + rendimentos dos 3 FIIs = R$ 127,04 líquidos."""
+    """JCP de ITUB4 + rendimentos dos 3 FIIs, líquidos."""
     assert len(extrato.proventos) == 4
     total_liquido = sum(p["valor_liquido"] for p in extrato.proventos)
-    assert total_liquido == pytest.approx(127.04, abs=0.01)
+    assert total_liquido == pytest.approx(PROVENTOS_LIQUIDOS_FIXTURE, abs=0.01)
     assert {p["ticker"] for p in extrato.proventos} == {"ITUB4", "KNCR11", "HGCR11", "RBRR11"}
 
 
 def test_comparativo_mes_anterior(extrato):
     """A aba Sumario traz o mês anterior — base do comparativo mensal."""
-    assert extrato.sumario["atual"]["data"] == "2026-07-31"
-    assert extrato.sumario["anterior"]["data"] == "2026-06-30"
-    assert extrato.sumario["atual"]["total"]["bruto"] == pytest.approx(***, abs=0.01)
-    assert extrato.sumario["anterior"]["total"]["bruto"] == pytest.approx(***, abs=0.01)
+    assert extrato.sumario["atual"]["data"] == DATA_REFERENCIA_FIXTURE
+    assert extrato.sumario["anterior"]["data"] == DATA_ANTERIOR_FIXTURE
+    assert extrato.sumario["atual"]["total"]["bruto"] == pytest.approx(TOTAL_BRUTO_FIM_FIXTURE, abs=0.01)
+    assert extrato.sumario["anterior"]["total"]["bruto"] == pytest.approx(TOTAL_BRUTO_INI_FIXTURE, abs=0.01)
 
 
 def test_nomes_com_espacos_colapsados(extrato):

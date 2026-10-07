@@ -5,12 +5,14 @@ import { fmtBRL, fmtData } from '../lib/format'
 
 interface Props {
   aberto: boolean
+  /** Arquivo já escolhido (vem do lote: o mês mais novo que a carteira). */
+  arquivoInicial?: File | null
   onFechar(): void
   /** Chamado após o upload dar certo — dispara o turno de confirmação no chat. */
   onImportado(): void
 }
 
-export default function ModalImport({ aberto, onFechar, onImportado }: Props) {
+export default function ModalImport({ aberto, arquivoInicial = null, onFechar, onImportado }: Props) {
   const [arquivo, setArquivo] = useState<File | null>(null)
   const [enviando, setEnviando] = useState(false)
   const [erro, setErro] = useState<string | null>(null)
@@ -18,16 +20,23 @@ export default function ModalImport({ aberto, onFechar, onImportado }: Props) {
   const [arrastando, setArrastando] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const timerRef = useRef<number | null>(null)
+  // Os callbacks ficam em ref: o efeito abaixo depende só de `aberto`. Com eles na
+  // lista de dependências, cada token do streaming no chat recriava as funções e
+  // o efeito zerava o modal no meio do upload — e cancelava a ida ao chat.
+  const fecharRef = useRef(onFechar)
+  const importadoRef = useRef(onImportado)
+  fecharRef.current = onFechar
+  importadoRef.current = onImportado
 
   useEffect(() => {
     if (!aberto) return
-    setArquivo(null)
+    setArquivo(arquivoInicial)
     setErro(null)
     setPreview(null)
     setEnviando(false)
 
     function esc(e: KeyboardEvent) {
-      if (e.key === 'Escape') onFechar()
+      if (e.key === 'Escape') fecharRef.current()
     }
     window.addEventListener('keydown', esc)
     return () => {
@@ -38,7 +47,8 @@ export default function ModalImport({ aberto, onFechar, onImportado }: Props) {
         timerRef.current = null
       }
     }
-  }, [aberto, onFechar])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- arquivoInicial só vale na abertura
+  }, [aberto])
 
   if (!aberto) return null
 
@@ -62,8 +72,8 @@ export default function ModalImport({ aberto, onFechar, onImportado }: Props) {
       // Deixa o preview visível por um instante antes de levar ao chat.
       timerRef.current = window.setTimeout(() => {
         timerRef.current = null
-        onFechar()
-        onImportado()
+        fecharRef.current()
+        importadoRef.current()
       }, 1100)
     } catch (e) {
       setErro((e as Error).message)
@@ -73,6 +83,10 @@ export default function ModalImport({ aberto, onFechar, onImportado }: Props) {
 
   const checagemFalhou = preview?.checagem_totais?.ok === false
   const ignoradas = preview?.linhas_ignoradas?.length ?? 0
+  // Tolerante a preview antigo: sem os campos, nada disto aparece.
+  const periodo = preview?.periodo ?? null
+  const errosValidacao = preview?.validacao?.erros ?? []
+  const avisosValidacao = preview?.validacao?.avisos ?? []
 
   return (
     <div
@@ -175,6 +189,26 @@ export default function ModalImport({ aberto, onFechar, onImportado }: Props) {
                 rotulo="Data de referência"
                 valor={fmtData(preview.data_referencia)}
               />
+              {periodo && (
+                <Linha
+                  rotulo="Período"
+                  valor={
+                    <>
+                      {periodo.inicio
+                        ? `${fmtData(periodo.inicio)} — ${fmtData(periodo.fim)}`
+                        : `até ${fmtData(periodo.fim)}`}
+                      {!periodo.mensal && (
+                        <span
+                          className="ml-1.5 rounded bg-surface-3 px-1.5 py-0.5 text-[10.5px] font-medium text-warn"
+                          title="Não é um mês inteiro: atualiza a carteira, mas não vira o mês na série de desempenho."
+                        >
+                          parcial
+                        </span>
+                      )}
+                    </>
+                  }
+                />
+              )}
               {preview.proventos_do_mes?.quantidade ? (
                 <Linha
                   rotulo="Proventos no mês"
@@ -182,6 +216,32 @@ export default function ModalImport({ aberto, onFechar, onImportado }: Props) {
                 />
               ) : null}
             </dl>
+
+            {errosValidacao.length > 0 && (
+              <div className="mt-3 flex items-start gap-2 rounded-lg bg-surface p-2.5 text-[12.5px] text-critical">
+                <TriangleAlert size={14} className="mt-0.5 shrink-0" />
+                <div className="min-w-0 space-y-1">
+                  {errosValidacao.map((e) => (
+                    <p key={e}>{e}</p>
+                  ))}
+                  <p className="font-medium">
+                    Este extrato não será gravado enquanto houver erro de
+                    conferência.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {avisosValidacao.length > 0 && (
+              <div className="mt-3 flex items-start gap-2 rounded-lg bg-surface p-2.5 text-[12.5px] text-warn">
+                <TriangleAlert size={14} className="mt-0.5 shrink-0" />
+                <div className="min-w-0 space-y-1">
+                  {avisosValidacao.map((a) => (
+                    <p key={a}>{a}</p>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {(checagemFalhou || ignoradas > 0) && (
               <div className="mt-3 flex items-start gap-2 rounded-lg bg-surface p-2.5 text-[12.5px] text-warn">
@@ -232,7 +292,7 @@ export default function ModalImport({ aberto, onFechar, onImportado }: Props) {
   )
 }
 
-function Linha({ rotulo, valor }: { rotulo: string; valor: string }) {
+function Linha({ rotulo, valor }: { rotulo: string; valor: React.ReactNode }) {
   return (
     <div className="flex justify-between gap-4">
       <dt className="text-ink-3">{rotulo}</dt>

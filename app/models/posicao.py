@@ -12,6 +12,7 @@ class ClasseAtivo(str, Enum):
     RF = "RF"           # renda fixa privada (CDB, LCI, LCA) — valor do extrato
     TESOURO = "TESOURO" # Tesouro Direto — preço diário oficial
     FUNDO = "FUNDO"     # fundos sem cotação pública — valor do extrato
+    CRIPTO = "CRIPTO"   # aba CriptoAtivos do extrato ('XBT BITCOIN (XBT)') — valor do extrato
     CAIXA = "CAIXA"
 
 

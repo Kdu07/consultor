@@ -1,4 +1,4 @@
-"""Testa o fluxo da Fase 3: noticias, dashboard e snapshot via API local."""
+"""Testa o fluxo da Fase 3: noticias, dashboard e desempenho via API local."""
 import json
 import sys
 import urllib.request
@@ -52,10 +52,16 @@ d = get("/dashboard")
 print(f"Total: R$ {d['total']:,.2f} | posicoes={len(d['posicoes'])} | ao_vivo={d['fracao_ao_vivo_pct']}%")
 print(f"Por classe: {[(c['classe'], c['percentual_atual']) for c in d['por_classe'][:4]]}")
 
-# ── Teste 2: snapshot ──────────────────────────────────────────────
-print("\n>>> POST /snapshots")
-snap = post("/snapshots")
-print(f"Snapshot id={snap['id']} data={snap['data_referencia']} total=R${snap['valor_total']:,.2f} pos={snap['posicoes_count']}")
+# ── Teste 2: desempenho ────────────────────────────────────────────
+# O snapshot manual (POST /snapshots) foi aposentado em 10/2026: a série vem dos extratos.
+print("\n>>> GET /desempenho")
+dz = get("/desempenho")
+if dz.get("vazio"):
+    print("Nenhum extrato arquivado ainda.")
+else:
+    j = dz["janelas"]["12m"]
+    print(f"Ultimo fechamento {dz['ultimo_fechamento']} | 12m: {j['rentabilidade_pct']}% "
+          f"(CDI {j['cdi_pct']}%) | benchmarks={dz['benchmarks']['status']}")
 
 # ── Teste 3: noticias via agente ───────────────────────────────────
 print("\n>>> noticias PETR4 via agente...")

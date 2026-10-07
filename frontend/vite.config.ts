@@ -11,6 +11,7 @@ const API_ROUTES = [
   '/snapshots',
   '/posicoes',
   '/extrato',
+  '/desempenho',
   '/health',
   '/docs',
   '/openapi.json',

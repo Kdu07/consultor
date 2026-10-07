@@ -1,7 +1,7 @@
 @import 'tailwindcss';
 
 /*
-  Tema escuro único. A paleta de dados (--color-s1..s8 e os status) é a paleta
+  Tema escuro único. A paleta de dados (--color-s1..s9 e os status) é a paleta
   de referência do método de dataviz, com os passos de dark mode validados
   contra a superfície de card #16181d: banda de luminosidade, piso de croma,
   separação CVD adjacente (pior par ΔE 8.4), piso de visão normal (19.3) e
@@ -44,6 +44,7 @@
   --color-s6: #008300;
   --color-s7: #9085e9;
   --color-s8: #e66767;
+  --color-s9: #1ba2a6;
 
   --font-sans:
     system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;

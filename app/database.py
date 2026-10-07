@@ -41,7 +41,8 @@ def create_tables() -> None:
     # Importar todos os modelos para que o SQLModel os registre
     from .models import (  # noqa: F401
         Posicao, AlvoClasse, AlvoAtivo, ConfigRebalanceamento,
-        PerfilRisco, QuoteCache, SnapshotMensal, ExtratoImportado,
+        PerfilRisco, QuoteCache, SnapshotMensal, ExtratoImportado, RegraLancamento,
+        ReferenciaCarteira, IndicadorMensal,
         EstrategiaInvestimento, PlanoFuturo, HistoricoEstrategia,
     )
     SQLModel.metadata.create_all(engine)

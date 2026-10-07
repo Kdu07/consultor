@@ -13,6 +13,8 @@ from .models import (
     ClasseAtivo,
 )
 from .models.estrategia import EstrategiaInvestimento
+from .models.referencia_carteira import ReferenciaCarteira
+from .tools.extrato_arquivo import as_of_das_posicoes, registrar_referencia
 
 logger = logging.getLogger(__name__)
 
@@ -72,10 +74,26 @@ def _seed_estrategia(session: Session) -> None:
     logger.info("EstrategiaInvestimento semeada (tese vazia — a definir via chat).")
 
 
+def _seed_referencia_carteira(session: Session) -> None:
+    """
+    Data de corte do import (docs/PLANO_HISTORICO.md): a carteira importada antes desta
+    tabela existir reflete o extrato do maior as_of das suas posições. Fixar isso agora
+    impede que uma edição manual futura (que grava o as_of que recebe) mova o corte.
+    """
+    if session.exec(select(ReferenciaCarteira)).first():
+        return
+    data_ref = as_of_das_posicoes(session)
+    if data_ref is None:
+        return   # carteira vazia ou só manual: o primeiro import define a referência
+    registrar_referencia(session, data_ref, origem="semente")
+    logger.info("ReferenciaCarteira semeada com %s (as_of das posições do extrato).", data_ref)
+
+
 def seed_all() -> None:
     with Session(engine) as session:
         _seed_config_rebalanceamento(session)
         _seed_perfil_risco(session)
         _seed_alvos_classe(session)
         _seed_estrategia(session)
+        _seed_referencia_carteira(session)
         session.commit()

@@ -58,36 +58,63 @@ saldo da conta corrente (classe `CAIXA`).
 Se o total das posições não bater com o Sumário do próprio extrato, o preview avisa — vale
 conferir antes de confirmar.
 
-### Histórico dos meses importados
+### Histórico e desempenho
 
 A carteira (tabela `posicao`) guarda só o estado atual: o import sobrescreve quantidade e
-valor de cada papel. Para que o mês anterior não desapareça, cada confirmação também grava:
+valor de cada papel. Por isso cada confirmação também **arquiva o extrato do mês** em
+`extratoimportado` — posições, proventos, movimentações, lotes de renda fixa, o razão da
+conta corrente, sumário e conferências. É único por data de referência: reenviar o mesmo
+XLSX **corrige** o mês, não duplica.
 
-| Onde | O que fica |
-|---|---|
-| `extratoimportado` | o extrato inteiro daquele mês — posições, proventos, movimentações, aluguel, valores em trânsito, sumário e conferência de totais |
-| `snapshotmensal` | o patrimônio na data de referência do extrato, que alimenta o gráfico do dashboard |
+A tela **Histórico** (barra lateral) lê esse arquivo:
 
-Ambos são únicos por data de referência: reenviar o mesmo XLSX **corrige** o mês, não
-duplica. Só lotes de extrato são arquivados — gravação manual de posição avulsa não inventa
-um mês no histórico.
+- **Desempenho** — rentabilidade mês a mês e acumulada (mês, ano, 12 meses, desde o início),
+  **descontados aportes e resgates** (Modified Dietz sobre o patrimônio do extrato,
+  encadeado), contra CDI e IPCA dos mesmos meses (BCB/SGS 12 e 433, guardados em
+  `indicadormensal`); renda passiva; e "De onde veio o resultado", por classe e por ativo,
+  com o mês a mês de cada papel. Exporta CSV para o Excel.
+- **Extratos** — os meses arquivados, a conferência de cada um, os lançamentos da conta com a
+  classificação (aporte, resgate, compra, provento...) e a comparação de dois meses.
 
-**Extratos antigos** podem ser importados para preencher o histórico com segurança: se a
-data de referência for anterior à do último extrato já importado, o consultor arquiva o mês
-e **não toca na carteira atual** (senão a reconciliação leria a foto antiga como "a carteira
-agora" e desativaria tudo o que veio depois). O agente avisa quando isso acontece.
+**Aportes e resgates saem do razão da conta corrente.** PIX, TED e DOC são reconhecidos pelo
+sinal; o que o classificador não reconhece fica "a classificar" e deixa o mês **provisório**
+até você escolher o tipo na aba Extratos — a escolha vira regra (`regralancamento`) e vale
+para os outros meses. Quantidade que muda sem compra nem venda (desdobramento, ativo trazido
+de outra corretora) aparece como pendência no Desempenho.
 
-Para consultar:
+**Meses antigos** entram de uma vez em **Extratos → "Enviar extratos antigos"** (até 24
+XLSX). O lote só arquiva meses que **não mexem na carteira** — anteriores à data que ela
+reflete (`referenciacarteira`). O mês mais novo continua entrando pelo chat, com o "sim"; e
+um extrato antigo enviado pelo chat também só é arquivado, sem voltar a carteira no tempo.
+Extratos arquivados antes da versão 2 do parser não têm o razão da conta: reenvie o XLSX
+para calcular a rentabilidade deles.
+
+No chat, o consultor responde perguntas de desempenho pela tool `desempenho_carteira`.
 
 ```
-GET /extrato/historico                # meses importados, do mais recente ao mais antigo
-GET /extrato/historico/2026-08-31     # o extrato completo daquele mês
+GET    /desempenho                            série, janelas, CDI/IPCA, renda passiva
+GET    /desempenho/composicao?janela=12m      por classe e por ativo (mes, ano, 12m, inicio)
+GET    /desempenho/ativo?chave=B3:BBAS3       um papel mês a mês
+GET    /desempenho/export.csv?tipo=mensal     ou tipo=ativos
+GET    /extrato/historico                     meses arquivados
+GET    /extrato/historico/2026-07-31          o extrato completo daquele mês
+GET    /extrato/historico/2026-07-31/lancamentos
+DELETE /extrato/historico/2026-07-31          tira do histórico (o mês da carteira não sai)
+GET    /extrato/comparar?de=2026-06-30&ate=2026-07-31
+POST   /extrato/lote                          avalia vários XLSX — nada é gravado
+POST   /extrato/lote/{id}/confirmar           arquiva os meses escolhidos
+GET    /extrato/regras · POST /extrato/regras · DELETE /extrato/regras/{id}
 ```
+
+`snapshotmensal` é legado: guarda as fotos manuais antigas (`GET /snapshots`), mas nada novo
+é gravado lá e nenhum gráfico o usa. Plano e decisões: [docs/PLANO_HISTORICO.md](docs/PLANO_HISTORICO.md).
 
 > **Privacidade:** o extrato contém nome, CPF e número da conta. `*.xlsx` está no
 > `.gitignore` e o servidor não grava o arquivo em disco. Guarde os extratos em `uploads/`
-> (também ignorado). O histórico arquivado guarda apenas o que o parser estruturou —
-> posições, valores e movimentações —, nunca um identificador pessoal.
+> (também ignorado). O histórico arquivado guarda apenas o que o parser estruturou: as
+> descrições de PIX e TED ficam só com palavras genéricas ("PIX RECEBIDO"), as demais têm
+> CPF, CNPJ, conta e números longos mascarados, e o nome do arquivo (que é o número da
+> conta) é mascarado já no upload.
 
 ## Backup e restauração
 

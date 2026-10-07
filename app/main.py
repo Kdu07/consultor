@@ -16,6 +16,8 @@ from .api.snapshots import router as snapshots_router
 from .api.dashboard import router as dashboard_router
 from .api.rebalanceamento import router as rebalanceamento_router
 from .api.extrato import router as extrato_router
+from .api.extrato_lote import router as extrato_lote_router
+from .api.desempenho import router as desempenho_router
 from .seeds import seed_all
 
 # ---------------------------------------------------------------------------
@@ -93,6 +95,8 @@ app.include_router(snapshots_router)
 app.include_router(dashboard_router)
 app.include_router(rebalanceamento_router)
 app.include_router(extrato_router)
+app.include_router(extrato_lote_router)
+app.include_router(desempenho_router)
 
 # Serve arquivos estáticos (UI) de /static
 static_dir = Path(__file__).parent.parent / "static"
